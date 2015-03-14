@@ -27,6 +27,7 @@ import runview
 import numpy as np
 from tracelog import TraceLog
 from table import Table
+from syncedtracelog import SyncedTraceLog
 
 """Supported types for extensions."""
 
@@ -169,6 +170,31 @@ def tracelog_view(data, app):
 t_tracelog.get_view = tracelog_view
 
 types_repository.append(t_tracelog)
+
+
+#------------------------------------------------------------------------------
+# Synchronized tracelog type
+
+t_syncedtracelog = Type("Kaira synchronized tracelog", "Synced tracelog")
+
+def load_kst(filename, app, settings = None):
+    
+    def load_syncedtracelog():
+        syncedtracelog = SyncedTraceLog(None)
+        return syncedtracelog
+        
+    return (load_syncedtracelog, settings)
+    
+t_syncedtracelog.register_load_function("kst", load_kst)
+
+def store_kst(syncedtracelog, filename, app, settings):
+    syncedtracelog.export_to_file(filename)
+    return (True, settings)
+    
+t_syncedtracelog.register_store_function("kst", store_kst)
+
+types_repository.append(t_syncedtracelog)
+
 
 # -----------------------------------------------------------------------------
 # Table type
