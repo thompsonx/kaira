@@ -1,6 +1,7 @@
 import tracelog
 import xml.etree.ElementTree as xml
 import loader
+from runinstance import RunInstance
 
 class SyncedTraceLog:
     
@@ -70,5 +71,3 @@ class LoadedTraceLog (tracelog.TraceLog):
             self.project = project
     
             self.first_runinstance = RunInstance(self.project, self.process_count)
-    
-            self._preprocess()
