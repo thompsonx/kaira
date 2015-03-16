@@ -4,17 +4,29 @@ import loader
 from runinstance import RunInstance
 
 class SyncedTraceLog:
+    """ Merges all tracelogs to one including also the header file"""
     
     def __init__(self, tracelog, filename=None):
+        """ Initializes the object
+        
+            Arguments:
+            tracelog -- TraceLog object which SyncedTraceLog will be formed from
+            filename -- Use if you want to load existing SyncedTracelog from a file, tracelog arg should be None
+        """
         if tracelog == None:
             self.load_from_file(filename)
         else:
             self.tracelog = tracelog
         
     def load_from_file(self, filename):
+        """ Loads existing *.kst file 
+            
+            Arguments:
+            filename -- Path to a *.kst
+        """
         pointer_size = 0
         process_count = 0
-        processes = []
+        traces = []
         project = 0
         
         with open(filename, "rb") as f:
@@ -27,16 +39,24 @@ class SyncedTraceLog:
                 processes_length.append(int(f.readline()))
                 i += 1
             
+            i = 0
             for p in processes_length:
-                processes.append(f.read(p))
+                trace = tracelog.Trace(f.read(p), i, pointer_size)
+                traces.append(trace)
+                i += 1
             
             x = xml.fromstring(f.read())
             project = loader.load_project_from_xml(x, "")
         
-        self.tracelog = LoadedTraceLog(pointer_size, processes, project)
+        self.tracelog = LoadedTraceLog(pointer_size, traces, project, True)
             
         
     def export_to_file(self, filename):
+        """ Merges and saves merged TraceLog to a *.kst file 
+            
+            Arguments:
+            filename -- Path to a *.kst
+        """
         data = str(self.tracelog.pointer_size) + '\n' + str(self.tracelog.process_count) + '\n'
         
         traces = ""
@@ -56,8 +76,17 @@ class SyncedTraceLog:
  
            
 class LoadedTraceLog (tracelog.TraceLog):
+        """ Supporting class for SyncedTraceLog. It is an extension of TraceLog class where no files are loaded"""
         
         def __init__(self, pointer_size, traces, project, export_data=False):
+            """ Initialize TraceLog from loaded data in Kaira 
+                
+                Arguments:
+                pointer_size -- Pointer size
+                traces -- List of Trace objects (one represents one process)
+                project -- Loaded XML data of a project
+                export_data -- Should be true to be able to visualize the tracelog
+            """
             self.filename = ""
             self.export_data = export_data
 #            self._read_header()
@@ -71,3 +100,5 @@ class LoadedTraceLog (tracelog.TraceLog):
             self.project = project
     
             self.first_runinstance = RunInstance(self.project, self.process_count)
+
+            self._preprocess()

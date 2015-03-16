@@ -178,7 +178,7 @@ types_repository.append(t_tracelog)
 t_syncedtracelog = Type("Kaira synchronized tracelog", "Synced tracelog")
 
 def load_kst(filename, app, settings = None):
-    print "Test"
+
     def load_syncedtracelog():
         syncedtracelog = SyncedTraceLog(None, filename)
         return syncedtracelog.tracelog
@@ -192,6 +192,11 @@ def store_kst(syncedtracelog, filename, app, settings):
     return (True, settings)
     
 t_syncedtracelog.register_store_function("kst", store_kst)
+
+def syncedtracelog_view(data, app):
+    return runview.RunView(app, data)
+    
+t_syncedtracelog.get_view = syncedtracelog_view
 
 types_repository.append(t_syncedtracelog)
 
