@@ -13,9 +13,14 @@ class TracelogSync(extensions.Operation):
 
         syncedtracelog = SyncedTraceLog(tracelog)
         
-        return extensions.Source("Synchronized tracelog",
+        source = extensions.Source("Synchronized tracelog",
                                  datatypes.t_syncedtracelog,
                                  syncedtracelog)
+        sourceView = extensions.SourceView(source, app)
+        
+        sourceView._cb_store()
+        
+        return source
 
 extensions.add_operation(TracelogSync)
 
