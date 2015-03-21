@@ -11,7 +11,7 @@ class TracelogSync(extensions.Operation):
 
     def run(self, app, tracelog):
 
-        syncedtracelog = SyncedTraceLog(tracelog)
+        syncedtracelog = SyncedTraceLog.fromtracelog(tracelog)
         
         source = extensions.Source("Synchronized tracelog",
                                  datatypes.t_syncedtracelog,

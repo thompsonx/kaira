@@ -180,7 +180,7 @@ t_syncedtracelog = Type("Kaira synchronized tracelog", "Synced tracelog")
 def load_kst(filename, app, settings = None):
 
     def load_syncedtracelog():
-        syncedtracelog = SyncedTraceLog(None, filename)
+        syncedtracelog = SyncedTraceLog.fromfile(filename)
         return syncedtracelog
         
     return (app._catch_io_error(load_syncedtracelog), settings)
@@ -194,7 +194,7 @@ def store_kst(syncedtracelog, filename, app, settings):
 t_syncedtracelog.register_store_function("kst", store_kst)
 
 def syncedtracelog_view(data, app):
-    return runview.RunView(app, data.tracelog)
+    return runview.RunView(app, data)
     
 t_syncedtracelog.get_view = syncedtracelog_view
 
