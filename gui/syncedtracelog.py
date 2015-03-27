@@ -1,7 +1,10 @@
 import xml.etree.ElementTree as xml
 import loader
+import utils
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
+from exportri import ExportRunInstance, place_counter_name
+from table import Table
            
 class SyncedTraceLog (TraceLog):
     
@@ -38,7 +41,7 @@ class SyncedTraceLog (TraceLog):
             
             i = 0
             for p in processes_length:
-                trace = Trace(f.read(p), i, pointer_size)
+                trace = SyncedTrace(f.read(p), i, pointer_size)
                 traces.append(trace)
                 i += 1
             
@@ -74,6 +77,72 @@ class SyncedTraceLog (TraceLog):
             self.first_runinstance = RunInstance(self.project, self.process_count)
     
             self._preprocess()
+            
+    def _preprocess(self):
+        # Set time offsets
+        starttime = min([ trace.get_init_time() for trace in self.traces ])
+        for trace in self.traces:
+            trace.time_offset = trace.get_init_time() - starttime
+#        trace_times = [ trace.get_next_event_time() for trace in self.traces ]
+
+        if self.export_data:
+            place_counters = [place_counter_name(p)
+                              for p in self.project.nets[0].places()
+                              if p.trace_tokens]
+
+            ri = ExportRunInstance(
+                self,
+                [ t for t in self.project.nets[0].transitions() if t.trace_fire ],
+                [ (p, i) for p in self.project.nets[0].places()
+                         for i, tracing in enumerate(p.trace_tokens_functions)
+                         if tracing.return_numpy_type != 'O' ],
+                ExportRunInstance.basic_header + place_counters)
+        else:
+            ri = RunInstance(
+                self.project, self.process_count)
+
+        index = 0
+        timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
+        full_timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
+        for t in self.traces:
+            while True:
+                if t.get_next_event_time() is None:
+                    break
+                full_timeline.add_row((t.process_id, t.pointer))
+                if t.is_next_event_visible():
+                    timeline.add_row(full_timeline[index])
+                t.process_event(ri)
+                index += 1
+            print "\n\n"
+#        while True:
+#
+#            # Searching for trace with minimal event time
+#            minimal_time_index = utils.index_of_minimal_value(trace_times)
+#            if minimal_time_index is None:
+#                break
+#
+#            trace = self.traces[minimal_time_index]
+#
+#            full_timeline.add_row((minimal_time_index, trace.pointer))
+#
+#            # Timeline update
+#            if trace.is_next_event_visible():
+#                timeline.add_row(full_timeline[index])
+#
+#            trace.process_event(ri)
+#            trace_times[minimal_time_index] = trace.get_next_event_time()
+#
+#            index += 1
+
+        self.data = Table([], 0)
+        if self.export_data:
+            self.data = ri.get_table()
+
+        timeline.trim()
+        full_timeline.trim()
+        self.timeline, self.full_timeline = timeline, full_timeline
+
+        self.missed_receives = ri.missed_receives
     
     def export_to_file(self, filename):
         """ Merges and saves merged TraceLog to a *.kst file 
@@ -97,3 +166,94 @@ class SyncedTraceLog (TraceLog):
             
         with open(filename, "wb") as f:
             f.write(data)
+
+
+class SyncedTrace(Trace):
+    
+    def __init__(self, data, process_id, pointer_size):
+        Trace.__init__(self, data, process_id, pointer_size)
+        
+    def _process_end(self, runinstance):
+        t = self.data[self.pointer]
+        if t != "X":
+            return
+        self.pointer += 1
+        values = self.struct_basic.unpack_from(self.data, self.pointer)
+        self.pointer += self.struct_basic.size
+        runinstance.event_end(self.process_id, values[0] + self.time_offset)
+        print str(self.process_id) + ' ' + t
+        
+
+    def _process_event_transition_fired(self, runinstance):
+        time, transition_id = self._read_struct_transition_fired()
+        pointer1 = self.pointer
+        values = self._read_transition_trace_function_data()
+        pointer2 = self.pointer
+        self.pointer = pointer1
+        runinstance.transition_fired(self.process_id,
+                                     time + self.time_offset,
+                                     transition_id,
+                                     values)
+        self.process_tokens_remove(runinstance)
+        self.pointer = pointer2
+        print str(self.process_id) + " TransS " + str(transition_id) + ' '
+        self._process_event_quit(runinstance)
+        self.process_tokens_add(runinstance)
+        self._process_end(runinstance)
+
+    def _process_event_transition_finished(self, runinstance):
+        time = self._read_struct_transition_finished()[0]
+        runinstance.transition_finished(self.process_id,
+                                        time + self.time_offset)
+        print str(self.process_id) + " TransF"                                        
+        self._process_event_quit(runinstance)
+        self.process_tokens_add(runinstance)
+        self._process_end(runinstance)
+
+    def _process_event_send(self, runinstance):
+        time, size, edge_id, target_ids = self._read_struct_send()
+        for target_id in target_ids:
+            runinstance.event_send(self.process_id,
+                                   time + self.time_offset,
+                                   target_id,
+                                   size,
+                                   edge_id)
+            print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id)
+
+    def _process_event_spawn(self, runinstance):
+        time, net_id = self._read_struct_spawn()
+        runinstance.event_spawn(self.process_id,
+                                time + self.time_offset,
+                                net_id)
+        self.process_tokens_add(runinstance)
+        print str(self.process_id) + " Spawn " + ' ' + str(net_id)
+
+    def _process_event_quit(self, runinstance):
+        t = self.data[self.pointer]
+        if t != "Q":
+            return
+        self.pointer += 1
+        time = self._read_struct_quit()[0]
+        runinstance.event_quit(self.process_id,
+                               time + self.time_offset)
+        print str(self.process_id) + " Quit "
+
+    def _process_event_receive(self, runinstance):
+        time, origin_id = self._read_struct_receive()
+        send_time = runinstance.event_receive(
+            self.process_id,
+            time + self.time_offset,
+            origin_id
+        ) or 1
+
+        self.process_tokens_add(runinstance, send_time)
+        print str(self.process_id) + " Recv " + str(origin_id)
+        self._process_end(runinstance)
+        
+
+    def _process_event_idle(self, runinstance):
+        time = self._read_struct_quit()[0]
+        runinstance.event_idle(self.process_id,
+                               time + self.time_offset)
+        print str(self.process_id) + " Idle "
+        
