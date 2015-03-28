@@ -5,6 +5,7 @@ from runinstance import RunInstance
 from tracelog import TraceLog, Trace
 from exportri import ExportRunInstance, place_counter_name
 from table import Table
+from Queue import Queue
            
 class SyncedTraceLog (TraceLog):
     
@@ -75,15 +76,13 @@ class SyncedTraceLog (TraceLog):
             self.project = kwargs["fromfile"][2]
     
             self.first_runinstance = RunInstance(self.project, self.process_count)
-    
+            
+            # Matrix of unprocessed sent messages        
+            self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
+            
             self._preprocess()
             
     def _preprocess(self):
-        # Set time offsets
-        starttime = min([ trace.get_init_time() for trace in self.traces ])
-        for trace in self.traces:
-            trace.time_offset = trace.get_init_time() - starttime
-#        trace_times = [ trace.get_next_event_time() for trace in self.traces ]
 
         if self.export_data:
             place_counters = [place_counter_name(p)
@@ -100,20 +99,56 @@ class SyncedTraceLog (TraceLog):
         else:
             ri = RunInstance(
                 self.project, self.process_count)
-
+        
         index = 0
         timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
         full_timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
-        for t in self.traces:
-            while True:
-                if t.get_next_event_time() is None:
-                    break
-                full_timeline.add_row((t.process_id, t.pointer))
-                if t.is_next_event_visible():
-                    timeline.add_row(full_timeline[index])
-                t.process_event(ri)
-                index += 1
-            print "\n\n"
+        
+        # List of unprocessed processes
+        processes = [x for x in range(self.process_count)]
+        # A process which will be processed
+        current_p = processes[0]
+        
+        while processes:
+            
+            working_p = current_p
+            trace = self.traces[working_p]
+            
+            while working_p == current_p:
+                if trace.get_next_event_time() is not None:
+                    full_timeline.add_row((trace.process_id, trace.pointer))
+                    if trace.is_next_event_visible():
+                        timeline.add_row(full_timeline[index])
+                    trace.process_event(ri)
+                    index += 1
+                elif trace.get_next_event_name() == "Recv ":
+                    sender = trace.get_msg_sender()
+                    if self.messages[sender][current_p].empty() is False:
+                        full_timeline.add_row((trace.process_id, trace.pointer))
+                        if trace.is_next_event_visible():
+                            timeline.add_row(full_timeline[index])
+                        trace.process_event(ri)
+                        index += 1
+                    else:
+                        current_p = sender
+                else:
+                    processes.remove(current_p)
+                    if not processes:
+                        current_p += 1
+                    else:
+                        current_p = processes[0]
+            
+#        for t in self.traces:
+#            while True:
+#                if t.get_next_event_time() is None:
+#                    break
+#                full_timeline.add_row((t.process_id, t.pointer))
+#                if t.is_next_event_visible():
+#                    timeline.add_row(full_timeline[index])
+#                t.process_event(ri)
+#                index += 1
+#            print "\n\n"
+
 #        while True:
 #
 #            # Searching for trace with minimal event time
@@ -170,8 +205,30 @@ class SyncedTraceLog (TraceLog):
 
 class SyncedTrace(Trace):
     
-    def __init__(self, data, process_id, pointer_size):
+    def __init__(self, data, process_id, pointer_size, tracelog=None):
         Trace.__init__(self, data, process_id, pointer_size)
+        self.tracelog = tracelog
+        self.clock = 1
+        
+    def _tick(self):
+        tmp_clock = self.clock
+        self.clock += 1
+        return tmp_clock
+        
+    def _tick_receive(self, send_time):
+        time = max([self.clock, send_time])
+        self.clock += 1
+        return time
+        
+    def get_msg_sender(self):
+        if self.get_next_event_name == "Recv ":
+            tmp_pointer = self.pointer
+            self.pointer += 1
+            time, origin_id = self._read_struct_receive()
+            self.pointer = tmp_pointer
+            return origin_id
+        else:
+            return None
         
     def _process_end(self, runinstance):
         t = self.data[self.pointer]
@@ -240,11 +297,12 @@ class SyncedTrace(Trace):
 
     def _process_event_receive(self, runinstance):
         time, origin_id = self._read_struct_receive()
-        send_time = runinstance.event_receive(
+        send_time =  self.tracelog.messages[origin_id][self.process_id].get()
+        time = self._tick_receive(send_time)
+        runinstance.event_receive(
             self.process_id,
-            time + self.time_offset,
-            origin_id
-        ) or 1
+            time,
+            origin_id)
 
         self.process_tokens_add(runinstance, send_time)
         print str(self.process_id) + " Recv " + str(origin_id)
