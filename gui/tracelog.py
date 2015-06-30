@@ -318,9 +318,9 @@ class Trace:
                 self.pointer += 1
                 token_pointer, place_id = self._read_struct_token()
                 runinstance.remove_token(place_id, token_pointer)
-            elif t == "M":
-                self.pointer += 1
-                self._process_event_send(runinstance)
+#             elif t == "M":
+#                 self.pointer += 1
+#                 self._process_event_send(runinstance)
             else:
                 break
 
