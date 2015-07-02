@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as xml
 import loader
 import utils
+import struct
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
 from exportri import ExportRunInstance, place_counter_name
@@ -152,6 +153,11 @@ class SyncedTraceLog (TraceLog):
             print "TRACE {0}".format(t.process_id)
             for c in t.output:
                 print c
+                
+        #Creates Traces, gives them repaired data and releases the synced
+        for i in range(self.process_count):
+            self.traces[i] = Trace(self.traces[i].data, i, self.traces[i].pointer_size)
+        
 #        for t in self.traces:
 #            while True:
 #                if t.get_next_event_time() is None:
@@ -221,6 +227,7 @@ class SyncedTrace(Trace):
     
     def __init__(self, data, process_id, pointer_size, tracelog=None):
         Trace.__init__(self, data, process_id, pointer_size)
+        self.pointer_size = pointer_size
         self.tracelog = tracelog
         self.clock = 1
         self.output = []
@@ -240,28 +247,39 @@ class SyncedTrace(Trace):
         if self.get_next_event_name() == "Recv ":
             tmp_pointer = self.pointer
             self.pointer += 1
-            time, origin_id = self._read_struct_receive()
+            origin_id = self._read_struct_receive()[1]
             self.pointer = tmp_pointer
             return origin_id
         else:
             return None
-        
+    
+    def repair_time(self, time):
+        self.data = self.data[:self.pointer] + self.struct_basic.pack(time) + \
+                    self.data[self.pointer + self.struct_basic.size:]
+    
     def _process_end(self, runinstance):
         t = self.data[self.pointer]
         if t != "X":
             return
         self.pointer += 1
-        values = self.struct_basic.unpack_from(self.data, self.pointer)
+#         values = self.struct_basic.unpack_from(self.data, self.pointer)
+        
+        time = self.clock - 1
+        self.repair_time(time)
         self.pointer += self.struct_basic.size
+        
         runinstance.event_end(self.process_id, self.clock - 1)
         
         self.output.append(str(self.process_id) + ' ' + t + ' ' + str(self.clock - 1))
         print str(self.process_id) + ' ' + t + ' ' + str(self.clock - 1)
         
 
-    def _process_event_transition_fired(self, runinstance):
-        time, transition_id = self._read_struct_transition_fired()
+    def _process_event_transition_fired(self, runinstance):        
         time = self._tick()
+        self.repair_time(time)
+                    
+        transition_id = self._read_struct_transition_fired()[1]
+        
         pointer1 = self.pointer
         values = self._read_transition_trace_function_data()
         pointer2 = self.pointer
@@ -281,8 +299,12 @@ class SyncedTrace(Trace):
         self._process_end(runinstance)
 
     def _process_event_transition_finished(self, runinstance):
-        time = self._read_struct_transition_finished()[0]
+        
         time = self._tick()
+        self.repair_time(time)
+               
+        self.pointer += self.struct_basic.size
+        
         runinstance.transition_finished(self.process_id,
                                         time)
         
@@ -294,8 +316,10 @@ class SyncedTrace(Trace):
         self._process_end(runinstance)
 
     def _process_event_send(self, runinstance):
-        time, size, edge_id, target_ids = self._read_struct_send()
         time = self._tick()
+        self.repair_time(time)
+        
+        size, edge_id, target_ids = self._read_struct_send()[1:]
         
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(time)
@@ -309,8 +333,11 @@ class SyncedTrace(Trace):
             print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time)
 
     def _process_event_spawn(self, runinstance):
-        time, net_id = self._read_struct_spawn()
         time = self._tick()
+        self.repair_time(time)
+        
+        net_id = self._read_struct_spawn()[1]
+        
         runinstance.event_spawn(self.process_id,
                                 time,
                                 net_id)
@@ -325,8 +352,11 @@ class SyncedTrace(Trace):
         if t != "Q":
             return
         self.pointer += 1
-        time = self._read_struct_quit()[0]
+        
         time = self._tick()
+        self.repair_time(time)
+        
+        self.pointer += self.struct_basic.size
         runinstance.event_quit(self.process_id,
                                time)
         
@@ -334,9 +364,18 @@ class SyncedTrace(Trace):
         print str(self.process_id) + " Quit " + str(time)
 
     def _process_event_receive(self, runinstance):
-        time, origin_id = self._read_struct_receive()
+        pointer1 = self.pointer
+        
+        origin_id = self._read_struct_receive()[1]
+        pointer2 = self.pointer
+        
         send_time =  self.tracelog.messages[origin_id][self.process_id].get()
         time = self._tick_receive(send_time)
+        self.pointer = pointer1
+        self.repair_time(time)
+        self.pointer = pointer2
+        
+        #Possible time corruption in the method below
         runinstance.event_receive(
             self.process_id,
             time,
@@ -350,8 +389,10 @@ class SyncedTrace(Trace):
         
 
     def _process_event_idle(self, runinstance):
-        time = self._read_struct_quit()[0]
         time = self._tick()
+        self.repair_time(time)
+        
+        self.pointer += self.struct_basic.size
         runinstance.event_idle(self.process_id,
                                time)
         
