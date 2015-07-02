@@ -1,7 +1,5 @@
 import xml.etree.ElementTree as xml
 import loader
-import utils
-import struct
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
 from exportri import ExportRunInstance, place_counter_name
@@ -27,7 +25,6 @@ class SyncedTraceLog (TraceLog):
             filename -- Path to a *.kst
         """
         pointer_size = 0
-        process_count = 0
         traces = []
         project = 0
         
@@ -62,7 +59,33 @@ class SyncedTraceLog (TraceLog):
                 Loads existing *.kst file and creates new SyncedTraceLog object
         """
         if "fromtracelog" in kwargs:         
-            TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
+#             TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
+            tracelog = kwargs["fromtracelog"]
+            self.filename = ""
+            self.export_data = tracelog.export_data
+    #            self._read_header()
+    
+    #            self.traces = [None] * self.process_count
+    #            for process_id in xrange(self.process_count):
+    #                self._read_trace(process_id)
+            self.pointer_size = tracelog.pointer_size
+            
+            self.traces = []
+            for t in tracelog.traces:
+                strace = SyncedTrace(t.data, t.process_id, self.pointer_size)
+                strace.tracelog = self
+                self.traces.append(strace)
+            
+            self.process_count = len(self.traces)
+            self.project = tracelog.project
+    
+            self.first_runinstance = RunInstance(self.project, self.process_count)
+            
+            # Matrix of unprocessed sent messages        
+            self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
+            
+            self._preprocess()
+
         elif "fromfile" in kwargs:
             self.filename = ""
             self.export_data = kwargs["fromfile"][3]
@@ -86,6 +109,8 @@ class SyncedTraceLog (TraceLog):
             self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
             
             self._preprocess()
+        else:
+            raise Exception("Unknown keyword argument!")
             
     def _preprocess(self):
 
@@ -156,7 +181,7 @@ class SyncedTraceLog (TraceLog):
                 
         #Creates Traces, gives them repaired data and releases the synced
         for i in range(self.process_count):
-            self.traces[i] = Trace(self.traces[i].data, i, self.traces[i].pointer_size)
+            self.traces[i] = Trace(self.traces[i].data, i, self.pointer_size)
         
 #        for t in self.traces:
 #            while True:
@@ -227,7 +252,6 @@ class SyncedTrace(Trace):
     
     def __init__(self, data, process_id, pointer_size, tracelog=None):
         Trace.__init__(self, data, process_id, pointer_size)
-        self.pointer_size = pointer_size
         self.tracelog = tracelog
         self.clock = 1
         self.output = []
