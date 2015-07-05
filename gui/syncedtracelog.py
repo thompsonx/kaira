@@ -65,7 +65,7 @@ class SyncedTraceLog (TraceLog):
 #             TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
             tracelog = kwargs["fromtracelog"]
             self.filename = tracelog.filename
-            self.export_data = tracelog.export_data
+#             self.export_data = tracelog.export_data
     #            self._read_header()
     
     #            self.traces = [None] * self.process_count
@@ -82,7 +82,7 @@ class SyncedTraceLog (TraceLog):
             self.process_count = len(self.traces)
             self.project = tracelog.project
     
-            self.first_runinstance = RunInstance(self.project, self.process_count)
+#             self.first_runinstance = RunInstance(self.project, self.process_count)
             
             # Matrix of unprocessed sent messages        
             self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
@@ -163,26 +163,6 @@ class SyncedTraceLog (TraceLog):
     
            
     def _synchronize(self):
-
-        if self.export_data:
-            place_counters = [place_counter_name(p)
-                              for p in self.project.nets[0].places()
-                              if p.trace_tokens]
-
-            ri = ExportRunInstance(
-                self,
-                [ t for t in self.project.nets[0].transitions() if t.trace_fire ],
-                [ (p, i) for p in self.project.nets[0].places()
-                         for i, tracing in enumerate(p.trace_tokens_functions)
-                         if tracing.return_numpy_type != 'O' ],
-                ExportRunInstance.basic_header + place_counters)
-        else:
-            ri = RunInstance(
-                self.project, self.process_count)
-        
-        index = 0
-        timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
-        full_timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
@@ -199,20 +179,12 @@ class SyncedTraceLog (TraceLog):
                     if trace.get_next_event_name() == "Recv ":
                         sender = trace.get_msg_sender()
                         if self.messages[sender][current_p].empty() is False:
-                            full_timeline.add_row((trace.process_id, trace.pointer))
-                            if trace.is_next_event_visible():
-                                timeline.add_row(full_timeline[index])
-                            trace.process_event(ri)
-                            index += 1
+                            trace.process_next()
                         else:
                             current_p = sender
                         print "RECV"
                     else:
-                        full_timeline.add_row((trace.process_id, trace.pointer))
-                        if trace.is_next_event_visible():
-                            timeline.add_row(full_timeline[index])
-                        trace.process_event(ri)
-                        index += 1
+                        trace.process_next()
                         print "NORMAL"
                 else:
                     processes.remove(current_p)
@@ -229,50 +201,6 @@ class SyncedTraceLog (TraceLog):
             for c in t.output:
                 print c
                 
-        #Creates Traces, gives them repaired data and releases the synced
-        for i in range(self.process_count):
-            self.traces[i] = Trace(self.traces[i].data, i, self.pointer_size)
-        
-#        for t in self.traces:
-#            while True:
-#                if t.get_next_event_time() is None:
-#                    break
-#                full_timeline.add_row((t.process_id, t.pointer))
-#                if t.is_next_event_visible():
-#                    timeline.add_row(full_timeline[index])
-#                t.process_event(ri)
-#                index += 1
-#            print "\n\n"
-
-#        while True:
-#
-#            # Searching for trace with minimal event time
-#            minimal_time_index = utils.index_of_minimal_value(trace_times)
-#            if minimal_time_index is None:
-#                break
-#
-#            trace = self.traces[minimal_time_index]
-#
-#            full_timeline.add_row((minimal_time_index, trace.pointer))
-#
-#            # Timeline update
-#            if trace.is_next_event_visible():
-#                timeline.add_row(full_timeline[index])
-#
-#            trace.process_event(ri)
-#            trace_times[minimal_time_index] = trace.get_next_event_time()
-#
-#            index += 1
-
-        self.data = Table([], 0)
-        if self.export_data:
-            self.data = ri.get_table()
-
-        timeline.trim()
-        full_timeline.trim()
-        self.timeline, self.full_timeline = timeline, full_timeline
-
-        self.missed_receives = ri.missed_receives
     
     def export_to_file(self, filename):
         """ Saves synchronized tracelog into a file 
@@ -331,7 +259,7 @@ class SyncedTrace(Trace):
         self.data = self.data[:self.pointer] + self.struct_basic.pack(time) + \
                     self.data[self.pointer + self.struct_basic.size:]
     
-    def _process_end(self, runinstance):
+    def _process_end(self):
         t = self.data[self.pointer]
         if t != "X":
             return
@@ -342,13 +270,11 @@ class SyncedTrace(Trace):
         self.repair_time(time)
         self.pointer += self.struct_basic.size
         
-        runinstance.event_end(self.process_id, self.clock - 1)
-        
         self.output.append(str(self.process_id) + ' ' + t + ' ' + str(self.clock - 1))
         print str(self.process_id) + ' ' + t + ' ' + str(self.clock - 1)
         
 
-    def _process_event_transition_fired(self, runinstance):        
+    def _process_event_transition_fired(self):        
         time = self._tick()
         self.repair_time(time)
                     
@@ -358,38 +284,31 @@ class SyncedTrace(Trace):
         values = self._read_transition_trace_function_data()
         pointer2 = self.pointer
         self.pointer = pointer1
-        runinstance.transition_fired(self.process_id,
-                                     time,
-                                     transition_id,
-                                     values)
         
         self.output.append(str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time))
         print str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time)
         
-        self.process_tokens_remove(runinstance)
+        self.process_tokens_remove()
         self.pointer = pointer2
-        self._process_event_quit(runinstance)
-        self.process_tokens_add(runinstance)
-        self._process_end(runinstance)
+        self._process_event_quit()
+        self.process_tokens_add()
+        self._process_end()
 
-    def _process_event_transition_finished(self, runinstance):
+    def _process_event_transition_finished(self):
         
         time = self._tick()
         self.repair_time(time)
                
         self.pointer += self.struct_basic.size
         
-        runinstance.transition_finished(self.process_id,
-                                        time)
-        
         self.output.append(str(self.process_id) + " TransF " + str(time))
         print str(self.process_id) + " TransF " + str(time)
                                               
-        self._process_event_quit(runinstance)
-        self.process_tokens_add(runinstance)
-        self._process_end(runinstance)
+        self._process_event_quit()
+        self.process_tokens_add()
+        self._process_end()
 
-    def _process_event_send(self, runinstance):
+    def _process_event_send(self):
         time = self._tick()
         self.repair_time(time)
         
@@ -397,31 +316,22 @@ class SyncedTrace(Trace):
         
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(time)
-            runinstance.event_send(self.process_id,
-                                   time,
-                                   target_id,
-                                   size,
-                                   edge_id)
             
-            self.output.append(str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time))
-            print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time)
+        self.output.append(str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time))
+        print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time)
 
-    def _process_event_spawn(self, runinstance):
+    def _process_event_spawn(self):
         time = self._tick()
         self.repair_time(time)
         
         net_id = self._read_struct_spawn()[1]
         
-        runinstance.event_spawn(self.process_id,
-                                time,
-                                net_id)
-        
         self.output.append(str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time))
         print str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time)
         
-        self.process_tokens_add(runinstance)
+        self.process_tokens_add()
 
-    def _process_event_quit(self, runinstance):
+    def _process_event_quit(self):
         t = self.data[self.pointer]
         if t != "Q":
             return
@@ -431,13 +341,11 @@ class SyncedTrace(Trace):
         self.repair_time(time)
         
         self.pointer += self.struct_basic.size
-        runinstance.event_quit(self.process_id,
-                               time)
         
         self.output.append(str(self.process_id) + " Quit " + str(time))
         print str(self.process_id) + " Quit " + str(time)
 
-    def _process_event_receive(self, runinstance):
+    def _process_event_receive(self):
         pointer1 = self.pointer
         
         origin_id = self._read_struct_receive()[1]
@@ -449,27 +357,79 @@ class SyncedTrace(Trace):
         self.repair_time(time)
         self.pointer = pointer2
         
-        #Possible time corruption in the method below
-        runinstance.event_receive(
-            self.process_id,
-            time,
-            origin_id)
-        
         self.output.append(str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time))
         print str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time)
         
-        self.process_tokens_add(runinstance, send_time)
-        self._process_end(runinstance)
+        self.process_tokens_add(send_time)
+        self._process_end()
         
 
-    def _process_event_idle(self, runinstance):
+    def _process_event_idle(self):
         time = self._tick()
         self.repair_time(time)
         
         self.pointer += self.struct_basic.size
-        runinstance.event_idle(self.process_id,
-                               time)
         
         self.output.append(str(self.process_id) + " Idle " + str(time))
         print str(self.process_id) + " Idle " + str(time)
+        
+    #New runinstance free methods
+    
+    def process_next(self):
+        t = self.data[self.pointer]
+        self.pointer += 1
+        if t == "T":
+            self._process_event_transition_fired()
+        elif t == "F":
+            self._process_event_transition_finished()
+        elif t == "R":
+            return self._process_event_receive()
+        elif t == "S":
+            return self._process_event_spawn()
+        elif t == "I":
+            return self._process_event_idle()
+        elif t == "Q":
+            # This is called only when transition that call ctx.quit is not traced
+            self.pointer -= 1 # _process_event_quit expect the pointer at "Q"
+            self._process_event_quit()
+        else:
+            raise Exception("Invalid event type '{0}/{1}' (pointer={2}, process={3})"
+                                .format(t, ord(t), hex(self.pointer), self.process_id))
+    
+    def process_tokens_add(self, send_time=0):
+        values = []
+        while not self.is_pointer_at_end():
+            t = self.data[self.pointer]
+            if t == "t":
+                values = []
+                self.pointer += 1
+                self._read_struct_token()
+            elif t == "i":
+                self.pointer += 1
+                value = self._read_struct_int()
+                values.append(value)
+            elif t == "d":
+                self.pointer += 1
+                value = self._read_struct_double()
+                values.append(value)
+            elif t == "s":
+                self.pointer += 1
+                value = self._read_cstring()
+                values.append(value)
+            elif t == "M":
+                self.pointer += 1
+                self._process_event_send()
+            else:
+                break
+    
+    def process_tokens_remove(self):
+        while not self.is_pointer_at_end():
+            t = self.data[self.pointer]
+            if t == "r":
+                self.pointer += 1
+                self._read_struct_token()
+            else:
+                break
+    
+    
         
