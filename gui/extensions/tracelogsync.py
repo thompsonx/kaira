@@ -18,9 +18,11 @@ class TracelogSync(extensions.Operation):
                                  syncedtracelog)
         sourceView = extensions.SourceView(source, app)
         
-#         sourceView._cb_store()
+        sourceView._cb_store()
         
-        return source
+        sourceView._cb_delete()
+        
+#         return source
 
 extensions.add_operation(TracelogSync)
 

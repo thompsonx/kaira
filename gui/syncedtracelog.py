@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as xml
 import loader
+import utils
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
 from exportri import ExportRunInstance, place_counter_name
@@ -11,6 +12,7 @@ class SyncedTraceLog (TraceLog):
     @classmethod
     def fromtracelog(cls, tracelog):
         """ Creates new SyncedTraceLog object from an existing TraceLog object
+            (does the synchronization)
             
             Arguments:
             tracelog -- TraceLog object
@@ -26,7 +28,7 @@ class SyncedTraceLog (TraceLog):
         """
         pointer_size = 0
         traces = []
-        project = 0
+        project = None
         
         with open(filename, "rb") as f:
             pointer_size = int(f.readline())
@@ -40,18 +42,19 @@ class SyncedTraceLog (TraceLog):
             
             i = 0
             for p in processes_length:
-                trace = SyncedTrace(f.read(p), i, pointer_size)
+                trace = Trace(f.read(p), i, pointer_size)
                 traces.append(trace)
                 i += 1
             
             x = xml.fromstring(f.read())
             project = loader.load_project_from_xml(x, "")
         
-        return cls(fromfile=(pointer_size, traces, project, True))
+        return cls(fromfile=(pointer_size, traces, project, True, filename))
     
     def __init__(self, **kwargs):
         """ Creates new SyncedTraceLog object, different method is used 
-            according to passed argument
+            according to passed argument. Preferred way for a new object construction
+            is to use one of the class methods (fromfile or fromtracelog)
             
             Key: 'fromtracelog' -> Value: TraceLog object
                 Creates new SyncedTraceLog object from an existing TraceLog object
@@ -61,7 +64,7 @@ class SyncedTraceLog (TraceLog):
         if "fromtracelog" in kwargs:         
 #             TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
             tracelog = kwargs["fromtracelog"]
-            self.filename = ""
+            self.filename = tracelog.filename
             self.export_data = tracelog.export_data
     #            self._read_header()
     
@@ -84,35 +87,82 @@ class SyncedTraceLog (TraceLog):
             # Matrix of unprocessed sent messages        
             self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
             
-            self._preprocess()
+            self._synchronize()
 
         elif "fromfile" in kwargs:
-            self.filename = ""
+            self.filename = kwargs["fromfile"][4]
             self.export_data = kwargs["fromfile"][3]
-    #            self._read_header()
-    
-    #            self.traces = [None] * self.process_count
-    #            for process_id in xrange(self.process_count):
-    #                self._read_trace(process_id)
+
             self.pointer_size = kwargs["fromfile"][0]
             
             self.traces = kwargs["fromfile"][1]
-            for t in self.traces:
-                t.tracelog = self
             
             self.process_count = len(self.traces)
             self.project = kwargs["fromfile"][2]
     
             self.first_runinstance = RunInstance(self.project, self.process_count)
             
-            # Matrix of unprocessed sent messages        
-            self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
-            
             self._preprocess()
+            
         else:
             raise Exception("Unknown keyword argument!")
-            
+    
+    
     def _preprocess(self):
+        
+        trace_times = [ trace.get_next_event_time() for trace in self.traces ]
+
+        if self.export_data:
+            place_counters = [place_counter_name(p)
+                              for p in self.project.nets[0].places()
+                              if p.trace_tokens]
+
+            ri = ExportRunInstance(
+                self,
+                [ t for t in self.project.nets[0].transitions() if t.trace_fire ],
+                [ (p, i) for p in self.project.nets[0].places()
+                         for i, tracing in enumerate(p.trace_tokens_functions)
+                         if tracing.return_numpy_type != 'O' ],
+                ExportRunInstance.basic_header + place_counters)
+        else:
+            ri = RunInstance(
+                self.project, self.process_count)
+
+        index = 0
+        timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
+        full_timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
+        while True:
+
+            # Searching for trace with minimal event time
+            minimal_time_index = utils.index_of_minimal_value(trace_times)
+            if minimal_time_index is None:
+                break
+
+            trace = self.traces[minimal_time_index]
+
+            full_timeline.add_row((minimal_time_index, trace.pointer))
+
+            # Timeline update
+            if trace.is_next_event_visible():
+                timeline.add_row(full_timeline[index])
+
+            trace.process_event(ri)
+            trace_times[minimal_time_index] = trace.get_next_event_time()
+
+            index += 1
+
+        self.data = Table([], 0)
+        if self.export_data:
+            self.data = ri.get_table()
+
+        timeline.trim()
+        full_timeline.trim()
+        self.timeline, self.full_timeline = timeline, full_timeline
+
+        self.missed_receives = ri.missed_receives
+    
+           
+    def _synchronize(self):
 
         if self.export_data:
             place_counters = [place_counter_name(p)
@@ -225,22 +275,22 @@ class SyncedTraceLog (TraceLog):
         self.missed_receives = ri.missed_receives
     
     def export_to_file(self, filename):
-        """ Merges and saves merged TraceLog to a *.kst file 
+        """ Saves synchronized tracelog into a file 
             
             Arguments:
             filename -- Path to a *.kst
         """
-        data = str(self.tracelog.pointer_size) + '\n' + str(self.tracelog.process_count) + '\n'
+        data = str(self.pointer_size) + '\n' + str(self.process_count) + '\n'
         
         traces = ""
 
-        for t in self.tracelog.traces:
+        for t in self.traces:
             data += str(len(t.data)) + '\n'
             traces += t.data
         
         data += traces
         
-        with open(self.tracelog.filename, "r") as f:
+        with open(self.filename, "r") as f:
             f.readline()
             data += f.read()
             
