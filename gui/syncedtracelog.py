@@ -373,7 +373,7 @@ class SyncedTrace(Trace):
         self.output.append(str(self.process_id) + " Idle " + str(time))
         print str(self.process_id) + " Idle " + str(time)
         
-    #New runinstance free methods
+    #New runinstance-free methods
     
     def process_next(self):
         t = self.data[self.pointer]
