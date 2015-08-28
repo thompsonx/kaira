@@ -166,6 +166,10 @@ class SyncedTraceLog (TraceLog):
     
            
     def _synchronize(self):
+        # Set time offsets
+        starttime = min([ trace.get_init_time() for trace in self.traces ])
+        for trace in self.traces:
+            trace.time_offset = trace.get_init_time() - starttime
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
@@ -273,6 +277,10 @@ class SyncedTrace(Trace):
         
         return newtime
         
+    def _forward_amortization(self, origin, new):
+        if (new > origin):
+            self.time_offset += (new - origin)
+        
     def get_msg_sender(self):
         if self.get_next_event_name() == "Recv ":
             tmp_pointer = self.pointer
@@ -295,7 +303,7 @@ class SyncedTrace(Trace):
         self.pointer += 1
         values = self.struct_basic.unpack_from(self.data, self.pointer)
         
-        time = self._clock(values[0])
+        time = self._clock(values[0] + self.time_offset)
         self.repair_time(time)
         self.pointer += self.struct_basic.size
         
@@ -307,7 +315,7 @@ class SyncedTrace(Trace):
         ptr = self.pointer                    
         time, transition_id = self._read_struct_transition_fired()
         pointer1 = self.pointer
-        time = self._clock(time)
+        time = self._clock(time + self.time_offset)
         self.pointer = ptr
         self.repair_time(time)
         self.pointer = pointer1
@@ -330,7 +338,7 @@ class SyncedTrace(Trace):
         time = self._read_struct_transition_finished()[0]
         
         self.pointer = pointer1
-        time = self._tick()
+        time = self._clock(time + self.time_offset)
         self.repair_time(time)
                
         self.pointer += self.struct_basic.size
@@ -348,7 +356,7 @@ class SyncedTrace(Trace):
         pointer2 = self.pointer
         
         self.pointer = pointer1
-        time = self._clock(time)
+        time = self._clock(time + self.time_offset)
         self.repair_time(time)
         self.pointer = pointer2
         
@@ -364,7 +372,7 @@ class SyncedTrace(Trace):
         pointer2 = self.pointer
         
         self.pointer = pointer1
-        time = self._clock(time)
+        time = self._clock(time + self.time_offset)
         self.repair_time(time)
         self.pointer = pointer2
         
@@ -383,7 +391,7 @@ class SyncedTrace(Trace):
         time = self._read_struct_quit()[0]
         
         self.pointer = pointer
-        time = self._clock(time)
+        time = self._clock(time + self.time_offset)
         self.repair_time(time)
         self.pointer += self.struct_basic.size
         
@@ -395,9 +403,13 @@ class SyncedTrace(Trace):
         
         time, origin_id = self._read_struct_receive()
         pointer2 = self.pointer
+        origin_time = time
         
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
-        time = self._clock_receive(time, send_time)
+        time = self._clock_receive(time + self.time_offset, send_time)
+        
+        self._forward_amortization(origin_time, time)
+        
         self.pointer = pointer1
         self.repair_time(time)
         self.pointer = pointer2
@@ -412,7 +424,7 @@ class SyncedTrace(Trace):
     def _process_event_idle(self):
         pointer = self.pointer
         time = self._read_struct_quit()[0]
-        time = self._clock(time)
+        time = self._clock(time + self.time_offset)
         self.pointer = pointer
         self.repair_time(time)
         self.pointer += self.struct_basic.size
