@@ -82,8 +82,8 @@ class SyncedTraceLog (TraceLog):
             self.process_count = len(self.traces)
             self.project = tracelog.project
             
-            self.minimal_event_diff = 0
-            self.minimum_msg_delay = 0 
+            self.minimal_event_diff = 10
+            self.minimum_msg_delay = 10 
     
 #             self.first_runinstance = RunInstance(self.project, self.process_count)
             
@@ -343,10 +343,14 @@ class SyncedTrace(Trace):
         self._process_end()
 
     def _process_event_send(self):
-        time = self._tick()
-        self.repair_time(time)
+        pointer1 = self.pointer
+        time, size, edge_id, target_ids = self._read_struct_send()
+        pointer2 = self.pointer
         
-        size, edge_id, target_ids = self._read_struct_send()
+        self.pointer = pointer1
+        time = self._clock(time)
+        self.repair_time(time)
+        self.pointer = pointer2
         
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(time)
@@ -355,10 +359,14 @@ class SyncedTrace(Trace):
         print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time)
 
     def _process_event_spawn(self):
-        time = self._tick()
-        self.repair_time(time)
+        pointer1 = self.pointer
+        time, net_id = self._read_struct_spawn()
+        pointer2 = self.pointer
         
-        net_id = self._read_struct_spawn()[1]
+        self.pointer = pointer1
+        time = self._clock(time)
+        self.repair_time(time)
+        self.pointer = pointer2
         
         self.output.append(str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time))
         print str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time)
@@ -371,9 +379,12 @@ class SyncedTrace(Trace):
             return
         self.pointer += 1
         
-        time = self._tick()
-        self.repair_time(time)
+        pointer = self.pointer
+        time = self._read_struct_quit()[0]
         
+        self.pointer = pointer
+        time = self._clock(time)
+        self.repair_time(time)
         self.pointer += self.struct_basic.size
         
         self.output.append(str(self.process_id) + " Quit " + str(time))
@@ -382,11 +393,11 @@ class SyncedTrace(Trace):
     def _process_event_receive(self):
         pointer1 = self.pointer
         
-        origin_id = self._read_struct_receive()[1]
+        time, origin_id = self._read_struct_receive()
         pointer2 = self.pointer
         
-        send_time =  self.tracelog.messages[origin_id][self.process_id].get()
-        time = self._tick_receive(send_time)
+        send_time = self.tracelog.messages[origin_id][self.process_id].get()
+        time = self._clock_receive(time, send_time)
         self.pointer = pointer1
         self.repair_time(time)
         self.pointer = pointer2
@@ -399,9 +410,11 @@ class SyncedTrace(Trace):
         
 
     def _process_event_idle(self):
-        time = self._tick()
+        pointer = self.pointer
+        time = self._read_struct_quit()[0]
+        time = self._clock(time)
+        self.pointer = pointer
         self.repair_time(time)
-        
         self.pointer += self.struct_basic.size
         
         self.output.append(str(self.process_id) + " Idle " + str(time))
