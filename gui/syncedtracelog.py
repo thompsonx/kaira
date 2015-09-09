@@ -250,10 +250,10 @@ class SyncedTrace(Trace):
         
         return newtime
         
-    def _forward_amortization(self, origin, new):
-        """ Checks shift of a receive event. If a shift exists the time offset is 
+    def _forward_amortization(self, origin, last_event_time, new):
+        """ Checks shift of a receive event. If a shift exists the time offset 
             is increased to keep the spacing between two events """
-        if (new > origin):
+        if new > origin or new > (last_event_time + self.tracelog.minimal_event_diff):
             self.time_offset += (new - origin)
         
     def get_msg_sender(self):
@@ -379,11 +379,12 @@ class SyncedTrace(Trace):
         time, origin_id = self._read_struct_receive()
         pointer2 = self.pointer
         origin_time = time
+        last_event_time = self.last_event_time
         
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
         time = self._clock_receive(time + self.time_offset, send_time)
         
-        self._forward_amortization(origin_time + self.time_offset, time)
+        self._forward_amortization(origin_time + self.time_offset, last_event_time, time)
         
         self.pointer = pointer1
         self.repair_time(time)
