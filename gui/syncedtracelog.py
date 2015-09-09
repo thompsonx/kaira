@@ -9,52 +9,9 @@ from Queue import Queue
            
 class SyncedTraceLog (TraceLog):
     
-    @classmethod
-    def fromtracelog(cls, tracelog):
-        """ Creates new SyncedTraceLog object from an existing TraceLog object
-            (does the synchronization)
-            
-            Arguments:
-            tracelog -- TraceLog object
-        """
-        return cls(fromtracelog=tracelog)
-    
-    @classmethod
-    def fromfile(cls, filename):
-        """ Loads existing *.kst file and creates new SyncedTraceLog object
-            
-            Arguments:
-            filename -- Path to a *.kst
-        """
-        pointer_size = 0
-        traces = []
-        project = None
-        
-        with open(filename, "rb") as f:
-            pointer_size = int(f.readline())
-            process_count = int(f.readline())
-            
-            i = 0
-            processes_length = []
-            while i < process_count:
-                processes_length.append(int(f.readline()))
-                i += 1
-            
-            i = 0
-            for p in processes_length:
-                trace = Trace(f.read(p), i, pointer_size)
-                traces.append(trace)
-                i += 1
-            
-            x = xml.fromstring(f.read())
-            project = loader.load_project_from_xml(x, "")
-        
-        return cls(fromfile=(pointer_size, traces, project, True, filename))
-    
     def __init__(self, **kwargs):
         """ Creates new SyncedTraceLog object, different method is used 
-            according to passed argument. Preferred way for a new object construction
-            is to use one of the class methods (fromfile or fromtracelog)
+            according to passed argument.
             
             Key: 'fromtracelog' -> Value: TraceLog object
                 Creates new SyncedTraceLog object from an existing TraceLog object
@@ -62,8 +19,17 @@ class SyncedTraceLog (TraceLog):
                 Loads existing *.kst file and creates new SyncedTraceLog object
         """
         if "fromtracelog" in kwargs:         
-#             TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
-            tracelog = kwargs["fromtracelog"]
+            self._from_tracelog(kwargs["fromtracelog"])
+
+        elif "fromfile" in kwargs:
+            self._from_file(kwargs["fromfile"])
+            
+        else:
+            raise Exception("Unknown keyword argument!")
+    
+    
+    def _from_tracelog(self, tracelog):
+        #             TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
             self.filename = tracelog.filename
 #             self.export_data = tracelog.export_data
     #            self._read_header()
@@ -91,25 +57,38 @@ class SyncedTraceLog (TraceLog):
             self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
             
             self._synchronize()
-
-        elif "fromfile" in kwargs:
-            self.filename = kwargs["fromfile"][4]
-            self.export_data = kwargs["fromfile"][3]
-
-            self.pointer_size = kwargs["fromfile"][0]
-            
-            self.traces = kwargs["fromfile"][1]
-            
-            self.process_count = len(self.traces)
-            self.project = kwargs["fromfile"][2]
     
-            self.first_runinstance = RunInstance(self.project, self.process_count)
+    def _from_file(self, filename):
+        self.pointer_size = 0
+        self.traces = []
+        self.project = None
+        
+        with open(filename, "rb") as f:
+            self.pointer_size = int(f.readline())
+            self.process_count = int(f.readline())
             
-            self._preprocess()
+            i = 0
+            processes_length = []
+            while i < self.process_count:
+                processes_length.append(int(f.readline()))
+                i += 1
             
-        else:
-            raise Exception("Unknown keyword argument!")
-    
+            i = 0
+            for p in processes_length:
+                trace = Trace(f.read(p), i, self.pointer_size)
+                self.traces.append(trace)
+                i += 1
+            
+            x = xml.fromstring(f.read())
+            self.project = loader.load_project_from_xml(x, "")
+        
+        self.filename = filename
+        self.export_data = True
+        self.process_count = len(self.traces)
+
+        self.first_runinstance = RunInstance(self.project, self.process_count)
+        
+        self._preprocess()
     
     def _preprocess(self):
         
@@ -166,6 +145,8 @@ class SyncedTraceLog (TraceLog):
     
            
     def _synchronize(self):
+        """ Main feature of this class. It controls whole synchronization procedure """
+        
         # Set time offsets
         starttime = min([ trace.get_init_time() for trace in self.traces ])
         for trace in self.traces:
@@ -176,6 +157,9 @@ class SyncedTraceLog (TraceLog):
         # A process which will be processed
         current_p = processes[0]
         
+        # Traverse algorithm goes through every event of a process,
+        # it jumps to another process if a send event of reached receive event
+        # is found to be unprocessed or if the end of process is reached
         while processes:
             
             working_p = current_p
@@ -238,20 +222,9 @@ class SyncedTrace(Trace):
     def __init__(self, data, process_id, pointer_size, tracelog=None):
         Trace.__init__(self, data, process_id, pointer_size)
         self.tracelog = tracelog
-        self.clock = 1
         self.output = []
         self.last_event_time = 0
         
-    def _tick(self):
-        tmp_clock = self.clock
-        self.clock += 1
-        return tmp_clock
-        
-    def _tick_receive(self, send_time):
-        """ Tick for received messages according to Lamport's logical clocks """
-        time = max([self.clock - 1, send_time]) + 1
-        self.clock = time + 1
-        return time
     
     def _clock(self, time):
         """ Checks and repairs time of a local non-receive event"""
@@ -278,6 +251,8 @@ class SyncedTrace(Trace):
         return newtime
         
     def _forward_amortization(self, origin, new):
+        """ Checks shift of a receive event. If a shift exists the time offset is 
+            is increased to keep the spacing between two events """
         if (new > origin):
             self.time_offset += (new - origin)
         
@@ -307,8 +282,8 @@ class SyncedTrace(Trace):
         self.repair_time(time)
         self.pointer += self.struct_basic.size
         
-        self.output.append(str(self.process_id) + ' ' + t + ' ' + str(self.clock - 1))
-        print str(self.process_id) + ' ' + t + ' ' + str(self.clock - 1)
+        self.output.append(str(self.process_id) + ' ' + t + ' ' + str(time))
+        print str(self.process_id) + ' ' + t + ' ' + str(time)
         
 
     def _process_event_transition_fired(self):        
@@ -408,7 +383,7 @@ class SyncedTrace(Trace):
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
         time = self._clock_receive(time + self.time_offset, send_time)
         
-        self._forward_amortization(origin_time, time)
+        self._forward_amortization(origin_time + self.time_offset, time)
         
         self.pointer = pointer1
         self.repair_time(time)
@@ -432,7 +407,7 @@ class SyncedTrace(Trace):
         self.output.append(str(self.process_id) + " Idle " + str(time))
         print str(self.process_id) + " Idle " + str(time)
         
-    #New runinstance-free methods
+    # New runinstance-free methods
     
     def process_next(self):
         t = self.data[self.pointer]
