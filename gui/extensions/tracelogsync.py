@@ -1,6 +1,8 @@
+import settingswindow
 import extensions
 import datatypes
 from syncedtracelog import SyncedTraceLog
+from gtk import RESPONSE_APPLY
 
 class TracelogSync(extensions.Operation):
 
@@ -8,9 +10,45 @@ class TracelogSync(extensions.Operation):
     description = "Connect and synchronize tracelogs to one"
 
     parameters = [ extensions.Parameter("Tracelog", datatypes.t_tracelog) ]
+    
+    def display_settings(self, app):
+        assistant = settingswindow.BasicSettingAssistant(1, 
+                                                         "Synchronization settings",
+                                                          app.window)
+        assistant.set_size_request(700, 400)
+        
+        def page(setting):
+            w = settingswindow.SettingWidget()
+            w.add_positive_int("min_event_diff", 
+                      "Minimal difference between 2 events in a process [ns]: ",
+                       "10")
+            w.add_positive_int("min_msg_delay", 
+                      "Minimum message delay of messages from one process to another [ns]: ", 
+                      "10")
+            w.add_checkbutton("init_times", 
+                              "Use processes' init times from tracelog to count their time offsets", 
+                              False)
+            w.add_checkbutton("forward_amort", 
+                              "Apply the forward amortization", 
+                              False)
+            return w
+        
+        assistant.append_setting_widget("Synchronization settings", page)
+        
+        if assistant.run() != RESPONSE_APPLY:
+            return
+        
+        return (assistant.get_setting("min_event_diff"), 
+                assistant.get_setting("min_msg_delay"),
+                assistant.get_setting("init_times"), 
+                assistant.get_setting("forward_amort"))
 
     def run(self, app, tracelog):
-
+        
+        settings = self.display_settings(app)
+        if settings is None:
+            return
+        
         syncedtracelog = SyncedTraceLog(fromtracelog=tracelog)
         
         source = extensions.Source("Synchronized tracelog",
@@ -22,7 +60,6 @@ class TracelogSync(extensions.Operation):
         
         sourceView._cb_delete()
         
-#         return source
 
 extensions.add_operation(TracelogSync)
 

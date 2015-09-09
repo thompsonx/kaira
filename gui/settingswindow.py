@@ -166,6 +166,7 @@ class SettingWidget(gtk.Table):
 
         """
         entry = gtk.Entry()
+        entry.set_text(default)
         def get():
             return (label, None, strToValue(entry.get_text()))
         self.add_widget(key, label, entry, get, validator)
