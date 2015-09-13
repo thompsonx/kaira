@@ -49,7 +49,7 @@ class TracelogSync(extensions.Operation):
         if settings is None:
             return
         
-        syncedtracelog = SyncedTraceLog(fromtracelog=tracelog)
+        syncedtracelog = SyncedTraceLog(fromtracelog=(tracelog, settings))
         
         source = extensions.Source("Synchronized tracelog",
                                  datatypes.t_syncedtracelog,

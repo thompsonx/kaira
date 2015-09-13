@@ -13,13 +13,15 @@ class SyncedTraceLog (TraceLog):
         """ Creates new SyncedTraceLog object, different method is used 
             according to passed argument.
             
-            Key: 'fromtracelog' -> Value: TraceLog object
+            Key: 'fromtracelog' -> Value: Tuple( TraceLog object, Settings tuple(
+                                                min_event_diff, min_msg_delay, 
+                                                init_times, forward_amort) )
                 Creates new SyncedTraceLog object from an existing TraceLog object
             Key: 'fromfile' -> Value: Path to a *.kst
                 Loads existing *.kst file and creates new SyncedTraceLog object
         """
         if "fromtracelog" in kwargs:         
-            self._from_tracelog(kwargs["fromtracelog"])
+            self._from_tracelog(kwargs["fromtracelog"][0], kwargs["fromtracelog"][1])
 
         elif "fromfile" in kwargs:
             self._from_file(kwargs["fromfile"])
@@ -28,7 +30,7 @@ class SyncedTraceLog (TraceLog):
             raise Exception("Unknown keyword argument!")
     
     
-    def _from_tracelog(self, tracelog):
+    def _from_tracelog(self, tracelog, settings):
         #             TraceLog.__init__(self, kwargs["fromtracelog"].filename, kwargs["fromtracelog"].export_data)
             self.filename = tracelog.filename
 #             self.export_data = tracelog.export_data
@@ -48,15 +50,17 @@ class SyncedTraceLog (TraceLog):
             self.process_count = len(self.traces)
             self.project = tracelog.project
             
-            self.minimal_event_diff = 10
-            self.minimum_msg_delay = 10 
+            self.minimal_event_diff = settings[0]
+            self.minimum_msg_delay = settings[1]
+            self.forward_amort = settings[3]
     
 #             self.first_runinstance = RunInstance(self.project, self.process_count)
             
             # Matrix of unprocessed sent messages        
             self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]            
             
-            self._synchronize()
+            self._synchronize(settings[2])
+            
     
     def _from_file(self, filename):
         self.pointer_size = 0
@@ -144,13 +148,19 @@ class SyncedTraceLog (TraceLog):
         self.missed_receives = ri.missed_receives
     
            
-    def _synchronize(self):
-        """ Main feature of this class. It controls whole synchronization procedure """
+    def _synchronize(self, init_times=True):
+        """ Main feature of this class. It controls whole synchronization procedure 
+            
+            Arguments:
+            init_times -- True/False - if True it will use processes' init times
+                             from tracelog to count their time offsets
+        """
         
-        # Set time offsets
-        starttime = min([ trace.get_init_time() for trace in self.traces ])
-        for trace in self.traces:
-            trace.time_offset = trace.get_init_time() - starttime
+        # Use processes' init times from tracelog to count their time offsets
+        if init_times:
+            starttime = min([ trace.get_init_time() for trace in self.traces ])
+            for trace in self.traces:
+                trace.time_offset = trace.get_init_time() - starttime
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
@@ -242,7 +252,8 @@ class SyncedTrace(Trace):
         """ Checks and repairs time of a receive event """
         newtime = 0
         if self.last_event_time != 0:
-            newtime = max([send_time + self.tracelog.minimum_msg_delay, time, self.last_event_time + self.tracelog.minimal_event_diff])
+            newtime = max([send_time + self.tracelog.minimum_msg_delay, time, \
+                           self.last_event_time + self.tracelog.minimal_event_diff])
         else:
             newtime = max([send_time + self.tracelog.minimum_msg_delay, time])
         
@@ -384,7 +395,9 @@ class SyncedTrace(Trace):
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
         time = self._clock_receive(time + self.time_offset, send_time)
         
-        self._forward_amortization(origin_time + self.time_offset, last_event_time, time)
+        if self.tracelog.forward_amort:
+            self._forward_amortization(origin_time + self.time_offset, \
+                                       last_event_time, time)
         
         self.pointer = pointer1
         self.repair_time(time)
