@@ -235,12 +235,36 @@ class SyncedTrace(Trace):
         self.output = []
         self.last_event_time = 0
         
+    def _clock_check(self, time, start_pointer, end_pointer, is_receive=False, send_time=0):
+        """ Checks, computes and repairs an event's timestamp
+            
+            Arguments:
+            time -- a timestamp to be checked
+            start_pointer -- a pointer value before an event unpacking/reading
+            end_pointer -- a pointer value after an event unpacking/reading
+            is_receive -- marks a receive event
+            send_time -- a timestamp of corresponding send event
+         """
+        newtime = 0
+        
+        if not is_receive:
+            newtime = self._clock(time + self.time_offset)
+        else:
+            newtime = self._clock_receive(time + self.time_offset, send_time)
+        
+        if newtime != time:
+            self.pointer = start_pointer
+            self._repair_time(newtime)
+            self.pointer = end_pointer
+        
+        return newtime            
     
     def _clock(self, time):
-        """ Checks and repairs time of a local non-receive event"""
+        """ Computes a new time for a process' internal event """
         newtime = 0
         if self.last_event_time != 0:
-            newtime = max([time, self.last_event_time + self.tracelog.minimal_event_diff])
+            newtime = max([time, self.last_event_time + \
+                           self.tracelog.minimal_event_diff])
         else:
             newtime = time
         
@@ -249,23 +273,28 @@ class SyncedTrace(Trace):
         return newtime
     
     def _clock_receive(self, time, send_time):
-        """ Checks and repairs time of a receive event """
+        """ Computes a new time for a process' receive event """
         newtime = 0
         if self.last_event_time != 0:
             newtime = max([send_time + self.tracelog.minimum_msg_delay, time, \
-                           self.last_event_time + self.tracelog.minimal_event_diff])
+                           self.last_event_time + \
+                           self.tracelog.minimal_event_diff])
         else:
             newtime = max([send_time + self.tracelog.minimum_msg_delay, time])
+        
+        if self.tracelog.forward_amort:
+            self._forward_amortization(time, newtime)
         
         self.last_event_time = newtime
         
         return newtime
         
-    def _forward_amortization(self, origin, last_event_time, new):
+    def _forward_amortization(self, origin_time, new_time):
         """ Checks shift of a receive event. If a shift exists the time offset 
             is increased to keep the spacing between two events """
-        if new > origin or new > (last_event_time + self.tracelog.minimal_event_diff):
-            self.time_offset += (new - origin)
+        if new_time > origin_time or new_time > \
+        (self.last_event_time + self.tracelog.minimal_event_diff):
+            self.time_offset += (new_time - origin_time)
         
     def get_msg_sender(self):
         if self.get_next_event_name() == "Recv ":
@@ -277,7 +306,7 @@ class SyncedTrace(Trace):
         else:
             return None
     
-    def repair_time(self, time):
+    def _repair_time(self, time):
         """ Overwrites original time in tracelog's data string with new one """
         self.data = self.data[:self.pointer] + self.struct_basic.pack(time) + \
                     self.data[self.pointer + self.struct_basic.size:]
@@ -287,11 +316,12 @@ class SyncedTrace(Trace):
         if t != "X":
             return
         self.pointer += 1
+        pointer1 = self.pointer
         values = self.struct_basic.unpack_from(self.data, self.pointer)
-        
-        time = self._clock(values[0] + self.time_offset)
-        self.repair_time(time)
         self.pointer += self.struct_basic.size
+        
+        time = self._clock_check(values[0], pointer1, pointer1 + self.struct_basic.size)
+        
         
         self.output.append(str(self.process_id) + ' ' + t + ' ' + str(time))
         print str(self.process_id) + ' ' + t + ' ' + str(time)
@@ -301,10 +331,7 @@ class SyncedTrace(Trace):
         ptr = self.pointer                    
         time, transition_id = self._read_struct_transition_fired()
         pointer1 = self.pointer
-        time = self._clock(time + self.time_offset)
-        self.pointer = ptr
-        self.repair_time(time)
-        self.pointer = pointer1
+        time = self._clock_check(time, ptr, pointer1)
         
         self._read_transition_trace_function_data()
         pointer2 = self.pointer
@@ -323,11 +350,7 @@ class SyncedTrace(Trace):
         pointer1 = self.pointer
         time = self._read_struct_transition_finished()[0]
         
-        self.pointer = pointer1
-        time = self._clock(time + self.time_offset)
-        self.repair_time(time)
-               
-        self.pointer += self.struct_basic.size
+        time = self._clock_check(time, pointer1, pointer1 + self.struct_basic.size)
         
         self.output.append(str(self.process_id) + " TransF " + str(time))
         print str(self.process_id) + " TransF " + str(time)
@@ -341,10 +364,7 @@ class SyncedTrace(Trace):
         time, size, edge_id, target_ids = self._read_struct_send()
         pointer2 = self.pointer
         
-        self.pointer = pointer1
-        time = self._clock(time + self.time_offset)
-        self.repair_time(time)
-        self.pointer = pointer2
+        time = self._clock_check(time, pointer1, pointer2)
         
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(time)
@@ -357,10 +377,7 @@ class SyncedTrace(Trace):
         time, net_id = self._read_struct_spawn()
         pointer2 = self.pointer
         
-        self.pointer = pointer1
-        time = self._clock(time + self.time_offset)
-        self.repair_time(time)
-        self.pointer = pointer2
+        time = self._clock_check(time, pointer1, pointer2)
         
         self.output.append(str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time))
         print str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time)
@@ -376,32 +393,18 @@ class SyncedTrace(Trace):
         pointer = self.pointer
         time = self._read_struct_quit()[0]
         
-        self.pointer = pointer
-        time = self._clock(time + self.time_offset)
-        self.repair_time(time)
-        self.pointer += self.struct_basic.size
+        time = self._clock_check(time, pointer, pointer + self.struct_basic.size)
         
         self.output.append(str(self.process_id) + " Quit " + str(time))
         print str(self.process_id) + " Quit " + str(time)
 
     def _process_event_receive(self):
         pointer1 = self.pointer
-        
         time, origin_id = self._read_struct_receive()
         pointer2 = self.pointer
-        origin_time = time
-        last_event_time = self.last_event_time
         
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
-        time = self._clock_receive(time + self.time_offset, send_time)
-        
-        if self.tracelog.forward_amort:
-            self._forward_amortization(origin_time + self.time_offset, \
-                                       last_event_time, time)
-        
-        self.pointer = pointer1
-        self.repair_time(time)
-        self.pointer = pointer2
+        time = self._clock_check(time, pointer1, pointer2, True, send_time)
         
         self.output.append(str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time))
         print str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time)
@@ -413,10 +416,7 @@ class SyncedTrace(Trace):
     def _process_event_idle(self):
         pointer = self.pointer
         time = self._read_struct_quit()[0]
-        time = self._clock(time + self.time_offset)
-        self.pointer = pointer
-        self.repair_time(time)
-        self.pointer += self.struct_basic.size
+        time = self._clock_check(time, pointer, pointer + self.struct_basic.size)
         
         self.output.append(str(self.process_id) + " Idle " + str(time))
         print str(self.process_id) + " Idle " + str(time)
