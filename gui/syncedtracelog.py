@@ -292,9 +292,10 @@ class SyncedTrace(Trace):
     def _forward_amortization(self, origin_time, new_time):
         """ Checks shift of a receive event. If a shift exists the time offset 
             is increased to keep the spacing between two events """
-        if new_time > origin_time or new_time > \
+        if new_time > origin_time and new_time > \
         (self.last_event_time + self.tracelog.minimal_event_diff):
-            self.time_offset += (new_time - origin_time)
+            self.time_offset += (new_time - max([origin_time, \
+            self.last_event_time + self.tracelog.minimal_event_diff]))
         
     def get_msg_sender(self):
         if self.get_next_event_name() == "Recv ":
