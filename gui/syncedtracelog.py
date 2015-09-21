@@ -180,7 +180,17 @@ class SyncedTraceLog (TraceLog):
                     if trace.get_next_event_name() == "Recv ":
                         sender = trace.get_msg_sender()
                         if self.messages[sender][current_p].empty() is False:
+                            #Backward amortization - check refilled receive times
+                            
+                            
                             trace.process_next()
+                            
+                            #Backward amortization - add receive time
+                            for event in \
+                            self.traces[sender].send_events[trace.last_send_time]:
+                                if event.receive == 0:
+                                    event.receive = trace.last_event_time
+                                    break
                         else:
                             current_p = sender
                         print "RECV"
@@ -234,6 +244,8 @@ class SyncedTrace(Trace):
         self.tracelog = tracelog
         self.output = []
         self.last_event_time = 0
+        self.send_events = {}
+        self.last_send_time = 0
         
     def _clock_check(self, time, start_pointer, end_pointer, is_receive=False, send_time=0):
         """ Checks, computes and repairs an event's timestamp
@@ -292,10 +304,16 @@ class SyncedTrace(Trace):
     def _forward_amortization(self, origin_time, new_time):
         """ Checks shift of a receive event. If a shift exists the time offset 
             is increased to keep the spacing between two events """
-        if new_time > origin_time and new_time > \
+        if new_time > origin_time or new_time > \
         (self.last_event_time + self.tracelog.minimal_event_diff):
-            self.time_offset += (new_time - max([origin_time, \
-            self.last_event_time + self.tracelog.minimal_event_diff]))
+            self.time_offset += (new_time - origin_time)
+    
+    def _backward_amortization(self, origin_time, new_time):
+        if not (new_time > origin_time and new_time > \
+                (self.last_event_time + self.tracelog.minimal_event_diff)):
+            return
+        offset = new_time - origin_time
+        
         
     def get_msg_sender(self):
         if self.get_next_event_name() == "Recv ":
@@ -369,6 +387,12 @@ class SyncedTrace(Trace):
         
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(time)
+            send_event = SendEvent()
+            send_event.timestamp = time
+            if time not in self.send_events:
+                self.send_events[time] = [send_event]
+            else:
+                self.send_events[time].append(send_event)
             
         self.output.append(str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time))
         print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time)
@@ -406,6 +430,7 @@ class SyncedTrace(Trace):
         
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
         time = self._clock_check(time, pointer1, pointer2, True, send_time)
+        self.last_send_time = send_time
         
         self.output.append(str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time))
         print str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time)
@@ -481,4 +506,10 @@ class SyncedTrace(Trace):
                 break
     
     
-        
+
+class SendEvent(object):
+    def  __init__(self):
+        self.timestamp = 0
+        self.receive = 0
+        self.offset = 0
+    
