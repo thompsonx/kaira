@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as xml
 import loader
 import utils
+import copy 
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
 from exportri import ExportRunInstance, place_counter_name
@@ -250,6 +251,8 @@ class SyncedTrace(Trace):
         self.last_received_send_time = 0
         self.last_refilled_send_time = None
         self._missing_receive_time_process_id = None
+        self._is_backward_amortization = False
+        self._last_reduced_time = None
         
     def _clock_check(self, time, start_pointer, end_pointer, is_receive=False, send_time=0):
         """ Checks, computes and repairs an event's timestamp
@@ -309,6 +312,8 @@ class SyncedTrace(Trace):
         
         if self.tracelog.forward_amort:
             self._forward_amortization(time, newtime)
+        if self._is_backward_amortization:
+            self._backward_amortization(time, newtime)
         
         self.last_event_time = newtime
         
@@ -322,14 +327,37 @@ class SyncedTrace(Trace):
             self.time_offset += (new_time - origin_time)
     
     def _backward_amortization(self, origin_time, new_time):
-        if not (new_time > origin_time and new_time > \
-                (self.last_event_time + self.tracelog.minimal_event_diff)):
-            return
         offset = new_time - origin_time
+        # Reduces collective messages into one
+        times = self.send_events.keys()
+        if self._last_reduced_time:
+            start = times.index(self._last_reduced_time)
+            times = times[start + 1:]
+        for t in times:
+            send_events = self.send_events[t]
+            if len(send_events) > 1:
+                index = send_events.index(min([e.offset for e in send_events]))
+                self.send_events[t] = [send_events[index]]
+        
+        # Eliminates send events which break linear growth of the offsets
+        linear_send_events = copy.deepcopy(self.send_events)
+        delete_events = Queue()
+        previous = SendEvent()
+        for time, event in linear_send_events.iteritems():
+            if previous.offset >= event[0].offset or previous.offset >= offset:
+                delete_events.put(previous.time)
+            previous = event[0]
+        length = delete_events.qsize()
+        while length > 0:
+            linear_send_events.pop(delete_events.get(), None)
+            length -= 1
+                         
         
     def is_backward_amortization(self):
         """ Returns True if the backward amortization is going to be done """
         if not self.get_next_event_name() == "Recv ":
+            return False
+        if self.last_event_time == 0:
             return False
         
         send_time = 0
@@ -353,6 +381,7 @@ class SyncedTrace(Trace):
         """ Returns True if all current send events (SendEvent send_events) have 
         refilled the receive time field """
         if not self.is_backward_amortization():
+            self._is_backward_amortization = False
             return True
         times = self.send_events.keys()
         if self.last_refilled_send_time:
@@ -363,6 +392,7 @@ class SyncedTrace(Trace):
                 if e.receive == 0:
                     self._missing_receive_time_process_id = e.receiver
                     return False
+        self._is_backward_amortization = True
         return True
     
     def refill_receive_time(self, send_time, receive_time):
