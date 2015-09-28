@@ -45,8 +45,7 @@ class SyncedTraceLog (TraceLog):
             
             self.traces = []
             for t in tracelog.traces:
-                strace = SyncedTrace(t.data, t.process_id, self.pointer_size)
-                strace.tracelog = self
+                strace = SyncedTrace(t.data, t.process_id, self.pointer_size, self)
                 self.traces.append(strace)
             
             self.process_count = len(self.traces)
@@ -245,6 +244,8 @@ class SyncedTrace(Trace):
     def __init__(self, data, process_id, pointer_size, tracelog=None):
         Trace.__init__(self, data, process_id, pointer_size)
         self.tracelog = tracelog
+        self._data_list = []
+        self.header_info = self.data[:self.pointer - 1]
         self.output = []
         self.last_event_time = 0
         self.send_events = OrderedDict()
@@ -330,7 +331,7 @@ class SyncedTrace(Trace):
         offset = new_time - origin_time
         # Reduces collective messages into one
         times = self.send_events.keys()
-        if self._last_reduced_time:
+        if self._last_reduced_time is not None:
             start = times.index(self._last_reduced_time)
             times = times[start + 1:]
         for t in times:
@@ -384,7 +385,7 @@ class SyncedTrace(Trace):
             self._is_backward_amortization = False
             return True
         times = self.send_events.keys()
-        if self.last_refilled_send_time:
+        if self.last_refilled_send_time is not None:
             start = times.index(self.last_refilled_send_time)
             times = times[start:]
         for t in times:
@@ -440,6 +441,7 @@ class SyncedTrace(Trace):
         t = self.data[self.pointer]
         if t != "X":
             return
+        self._data_list.append([t])
         self.pointer += 1
         pointer1 = self.pointer
         values = self.struct_basic.unpack_from(self.data, self.pointer)
@@ -456,10 +458,9 @@ class SyncedTrace(Trace):
         ptr = self.pointer                    
         time, transition_id = self._read_struct_transition_fired()
         pointer1 = self.pointer
-        time = self._clock_check(time, ptr, pointer1)
-        
         self._read_transition_trace_function_data()
         pointer2 = self.pointer
+        time = self._clock_check(time, ptr, pointer2)
         self.pointer = pointer1
         
         self.output.append(str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time))
@@ -519,6 +520,7 @@ class SyncedTrace(Trace):
         t = self.data[self.pointer]
         if t != "Q":
             return
+        self._data_list.append([t])
         self.pointer += 1
         
         pointer = self.pointer
@@ -558,6 +560,7 @@ class SyncedTrace(Trace):
     def process_next(self):
         t = self.data[self.pointer]
         self.pointer += 1
+        self._data_list.append([t])
         if t == "T":
             self._process_event_transition_fired()
         elif t == "F":
@@ -578,6 +581,7 @@ class SyncedTrace(Trace):
     
     def process_tokens_add(self, send_time=0):
         values = []
+        pointer1 = self.pointer
         while not self.is_pointer_at_end():
             t = self.data[self.pointer]
             if t == "t":
@@ -601,6 +605,9 @@ class SyncedTrace(Trace):
                 self._process_event_send()
             else:
                 break
+        if values:
+            last = self._data_list[-1]
+            last.append(self.data[pointer1:self.pointer])
     
     def process_tokens_remove(self):
         while not self.is_pointer_at_end():
