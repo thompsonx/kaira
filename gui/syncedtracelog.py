@@ -8,6 +8,7 @@ from exportri import ExportRunInstance, place_counter_name
 from table import Table
 from Queue import Queue, Empty
 from collections import OrderedDict
+from cStringIO import StringIO
            
 class SyncedTraceLog (TraceLog):
     
@@ -54,7 +55,7 @@ class SyncedTraceLog (TraceLog):
             self.minimal_event_diff = settings[0]
             self.minimum_msg_delay = settings[1]
             self.forward_amort = settings[3]
-            self.backward_amort = True
+            self.backward_amort = False
     
 #             self.first_runinstance = RunInstance(self.project, self.process_count)
             
@@ -226,8 +227,9 @@ class SyncedTraceLog (TraceLog):
         traces = ""
 
         for t in self.traces:
-            data += str(len(t.data)) + '\n'
-            traces += t.data
+            tdata = t.export_data()
+            data += str(len(tdata)) + '\n'
+            traces += tdata
         
         data += traces
         
@@ -245,7 +247,7 @@ class SyncedTrace(Trace):
         Trace.__init__(self, data, process_id, pointer_size)
         self.tracelog = tracelog
         self._data_list = []
-        self.header_info = self.data[:self.pointer - 1]
+        self._header_info = self.data[:self.pointer]
         self.output = []
         self.last_event_time = 0
         self.send_events = OrderedDict()
@@ -255,13 +257,13 @@ class SyncedTrace(Trace):
         self._is_backward_amortization = False
         self._last_reduced_time = None
         
-    def _clock_check(self, time, start_pointer, end_pointer, is_receive=False, send_time=0):
+    def _clock_check(self, time, start_pointer, end_pointer=False, is_receive=False, send_time=0):
         """ Checks, computes and repairs an event's timestamp
             
             Arguments:
             time -- a timestamp to be checked
             start_pointer -- a pointer value before an event unpacking/reading
-            end_pointer -- a pointer value after an event unpacking/reading
+            end_pointer -- a pointer value after an event unpacking/reading, if False self.pointer is used
             is_receive -- marks a receive event
             send_time -- a timestamp of corresponding send event
          """
@@ -272,10 +274,8 @@ class SyncedTrace(Trace):
         else:
             newtime = self._clock_receive(time + self.time_offset, send_time)
         
-        if newtime != time:
-            self.pointer = start_pointer
-            self._repair_time(newtime)
-            self.pointer = end_pointer
+        #Save time to the data list
+        self._repair_time(newtime, start_pointer, end_pointer)
         
         return newtime            
     
@@ -412,6 +412,16 @@ class SyncedTrace(Trace):
                 self.last_refilled_send_time = send_time
                 break
     
+    def export_data(self):
+        stream = StringIO()
+        stream.write(self._header_info)
+        for event in self._data_list:
+            for data in event:
+                stream.write(data)
+        export = stream.getvalue()
+        stream.close()
+        return export
+    
     @property
     def missing_receive_time_process_id(self):
         """ Get the id of a process of which the time of a receive event was 
@@ -428,14 +438,22 @@ class SyncedTrace(Trace):
         else:
             return None
     
-    def _repair_time(self, time):
+    def _repair_time(self, time, start_pointer, end_pointer):
         """ Overwrites original time in tracelog's data string with new one 
             
             Arguments:
             time -- a new time to be saved
+            start_pointer -- points to the start of event's data
+            end_pointer -- points to the end of event ('s data)
         """
-        self.data = self.data[:self.pointer] + self.struct_basic.pack(time) + \
-                    self.data[self.pointer + self.struct_basic.size:]
+#         self.data = self.data[:self.pointer] + self.struct_basic.pack(time) + \
+#                     self.data[self.pointer + self.struct_basic.size:]
+        event = self._data_list[-1]
+        event.append(self.struct_basic.pack(time))
+        start_pointer += self.struct_basic.size
+        if end_pointer is False:
+            end_pointer = self.pointer
+        event.append( self.data[ start_pointer : end_pointer ] )
     
     def _process_end(self):
         t = self.data[self.pointer]
@@ -447,7 +465,7 @@ class SyncedTrace(Trace):
         values = self.struct_basic.unpack_from(self.data, self.pointer)
         self.pointer += self.struct_basic.size
         
-        time = self._clock_check(values[0], pointer1, pointer1 + self.struct_basic.size)
+        time = self._clock_check(values[0], pointer1)
         
         
         self.output.append(str(self.process_id) + ' ' + t + ' ' + str(time))
@@ -466,6 +484,7 @@ class SyncedTrace(Trace):
         self.output.append(str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time))
         print str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time)
         
+        # Possible duplicate - return back with pointer2 and process once again
         self.process_tokens_remove()
         self.pointer = pointer2
         self._process_event_quit()
@@ -476,7 +495,7 @@ class SyncedTrace(Trace):
         pointer1 = self.pointer
         time = self._read_struct_transition_finished()[0]
         
-        time = self._clock_check(time, pointer1, pointer1 + self.struct_basic.size)
+        time = self._clock_check(time, pointer1)
         
         self.output.append(str(self.process_id) + " TransF " + str(time))
         print str(self.process_id) + " TransF " + str(time)
@@ -488,9 +507,8 @@ class SyncedTrace(Trace):
     def _process_event_send(self):
         pointer1 = self.pointer
         time, size, edge_id, target_ids = self._read_struct_send()
-        pointer2 = self.pointer
         
-        time = self._clock_check(time, pointer1, pointer2)
+        time = self._clock_check(time, pointer1)
         
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(time)
@@ -507,9 +525,8 @@ class SyncedTrace(Trace):
     def _process_event_spawn(self):
         pointer1 = self.pointer
         time, net_id = self._read_struct_spawn()
-        pointer2 = self.pointer
         
-        time = self._clock_check(time, pointer1, pointer2)
+        time = self._clock_check(time, pointer1)
         
         self.output.append(str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time))
         print str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time)
@@ -526,7 +543,7 @@ class SyncedTrace(Trace):
         pointer = self.pointer
         time = self._read_struct_quit()[0]
         
-        time = self._clock_check(time, pointer, pointer + self.struct_basic.size)
+        time = self._clock_check(time, pointer)
         
         self.output.append(str(self.process_id) + " Quit " + str(time))
         print str(self.process_id) + " Quit " + str(time)
@@ -534,23 +551,22 @@ class SyncedTrace(Trace):
     def _process_event_receive(self):
         pointer1 = self.pointer
         time, origin_id = self._read_struct_receive()
-        pointer2 = self.pointer
         
         send_time = self.tracelog.messages[origin_id][self.process_id].get()
-        time = self._clock_check(time, pointer1, pointer2, True, send_time)
+        time = self._clock_check(time, pointer1, False, True, send_time)
         self.last_received_send_time = send_time
         
         self.output.append(str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time))
         print str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time)
         
-        self.process_tokens_add(send_time)
+        self.process_tokens_add()
         self._process_end()
         
 
     def _process_event_idle(self):
         pointer = self.pointer
         time = self._read_struct_quit()[0]
-        time = self._clock_check(time, pointer, pointer + self.struct_basic.size)
+        time = self._clock_check(time, pointer)
         
         self.output.append(str(self.process_id) + " Idle " + str(time))
         print str(self.process_id) + " Idle " + str(time)
@@ -579,9 +595,10 @@ class SyncedTrace(Trace):
             raise Exception("Invalid event type '{0}/{1}' (pointer={2}, process={3})"
                                 .format(t, ord(t), hex(self.pointer), self.process_id))
     
-    def process_tokens_add(self, send_time=0):
+    def process_tokens_add(self):
         values = []
         pointer1 = self.pointer
+        last = self._data_list[-1]
         while not self.is_pointer_at_end():
             t = self.data[self.pointer]
             if t == "t":
@@ -601,12 +618,12 @@ class SyncedTrace(Trace):
                 value = self._read_cstring()
                 values.append(value)
             elif t == "M":
+                self._data_list.append([t])
                 self.pointer += 1
                 self._process_event_send()
             else:
                 break
         if values:
-            last = self._data_list[-1]
             last.append(self.data[pointer1:self.pointer])
     
     def process_tokens_remove(self):
