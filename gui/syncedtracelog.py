@@ -191,7 +191,9 @@ class SyncedTraceLog (TraceLog):
                                 
                                 trace.process_next()
                                 #Backward amortization - add receive time and maximum offset
-                                self.traces[sender].refill_receive_time(trace.last_received_send_time, trace.last_event_time) 
+                                self.traces[sender].refill_receive_time(trace.last_received_send_time,\
+                                                                         trace.last_event_time,\
+                                                                         working_p) 
                             else:
                                 trace.process_next()                                        
                         else:
@@ -255,7 +257,7 @@ class SyncedTrace(Trace):
         self.last_refilled_send_time = None
         self._missing_receive_time_process_id = None
         self._is_backward_amortization = False
-        self._last_reduced_time = None
+        self._receive_send_table = {}
         
     def _clock_check(self, time, start_pointer, end_pointer=False, is_receive=False, send_time=0):
         """ Checks, computes and repairs an event's timestamp
@@ -329,19 +331,15 @@ class SyncedTrace(Trace):
     
     def _backward_amortization(self, origin_time, new_time):
         offset = new_time - origin_time
+        linear_send_events = copy.deepcopy(self.send_events)
         # Reduces collective messages into one
-        times = self.send_events.keys()
-        if self._last_reduced_time is not None:
-            start = times.index(self._last_reduced_time)
-            times = times[start + 1:]
-        for t in times:
+        for t in linear_send_events.keys():
             send_events = self.send_events[t]
             if len(send_events) > 1:
                 index = send_events.index(min([e.offset for e in send_events]))
-                self.send_events[t] = [send_events[index]]
+                linear_send_events[t] = [send_events[index]]
         
         # Eliminates send events which break linear growth of the offsets
-        linear_send_events = copy.deepcopy(self.send_events)
         delete_events = Queue()
         previous = SendEvent()
         for time, event in linear_send_events.iteritems():
@@ -352,7 +350,22 @@ class SyncedTrace(Trace):
         while length > 0:
             linear_send_events.pop(delete_events.get(), None)
             length -= 1
-                         
+        
+        # Repair times
+        # All events can be shifted by the offset
+        if not linear_send_events:
+            for index, event in enumerate(self._data_list):
+                event[1] = event[1] + offset
+                if event[0] == "R":
+                    send_time = self._receive_send_table[index].send_time
+                    origin_id = self._receive_send_table[index].origin_id
+                    self.tracelog.traces[origin_id].refill_receive_time(send_time, \
+                                                                        event[1], \
+                                                                        self.process_id)
+            new_send_events = OrderedDict()
+            #TODO: oprava self.send_events a pripad kdy linear_send_events neni prazdny
+#             for time, event in self.send_events.iteritems():
+#                 for
         
     def is_backward_amortization(self):
         """ Returns True if the backward amortization is going to be done """
@@ -396,7 +409,7 @@ class SyncedTrace(Trace):
         self._is_backward_amortization = True
         return True
     
-    def refill_receive_time(self, send_time, receive_time):
+    def refill_receive_time(self, send_time, receive_time, receiver):
         """ Backward amortization - adds receive time for a specific send time 
             and compute maximum offset
             
@@ -405,7 +418,7 @@ class SyncedTrace(Trace):
             receive_time -- time of a receipt of the msg to be filled
         """
         for event in self.send_events[send_time]:
-            if event.receive == 0:
+            if event.receiver == receiver:
                 event.receive = receive_time
                 event.offset = receive_time - \
                     self.tracelog.minimum_msg_delay - send_time
@@ -416,6 +429,7 @@ class SyncedTrace(Trace):
         stream = StringIO()
         stream.write(self._header_info)
         for event in self._data_list:
+            event[1] = self.struct_basic.pack(event[1])
             for data in event:
                 stream.write(data)
         export = stream.getvalue()
@@ -449,7 +463,7 @@ class SyncedTrace(Trace):
 #         self.data = self.data[:self.pointer] + self.struct_basic.pack(time) + \
 #                     self.data[self.pointer + self.struct_basic.size:]
         event = self._data_list[-1]
-        event.append(self.struct_basic.pack(time))
+        event.append(time)
         start_pointer += self.struct_basic.size
         if end_pointer is False:
             end_pointer = self.pointer
@@ -511,7 +525,7 @@ class SyncedTrace(Trace):
         time = self._clock_check(time, pointer1)
         
         for target_id in target_ids:
-            self.tracelog.messages[self.process_id][target_id].put(time)
+            self.tracelog.messages[self.process_id][target_id].put(self._data_list[-1])
             send_event = SendEvent()
             send_event.receiver = target_id
             if time not in self.send_events.keys():
@@ -552,7 +566,9 @@ class SyncedTrace(Trace):
         pointer1 = self.pointer
         time, origin_id = self._read_struct_receive()
         
-        send_time = self.tracelog.messages[origin_id][self.process_id].get()
+        send_event = self.tracelog.messages[origin_id][self.process_id].get()
+        send_time = send_event[1]
+        self._receive_send_table[ len(self._data_list) ] = RSTableElement(send_event, origin_id)
         time = self._clock_check(time, pointer1, False, True, send_time)
         self.last_received_send_time = send_time
         
@@ -650,4 +666,9 @@ class SendEvent(object):
         self.receive = 0
         self.receiver = None
         self.offset = 0
+        
+class RSTableElement(object):
+    def __init__(self, send_event, origin_id):
+        self.send_event = send_event
+        self.origin_id = origin_id
     
