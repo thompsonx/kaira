@@ -337,15 +337,17 @@ class SyncedTrace(Trace):
             send_events = self.send_events[t]
             if len(send_events) > 1:
                 index = send_events.index(min([e.offset for e in send_events]))
-                linear_send_events[t] = [send_events[index]]
+                linear_send_events[t] = send_events[index]
+            else:
+                linear_send_events[t] = linear_send_events[t][0]
         
         # Eliminates send events which break linear growth of the offsets
         delete_events = Queue()
         previous = SendEvent()
         for time, event in linear_send_events.iteritems():
-            if previous.offset >= event[0].offset or previous.offset >= offset:
+            if previous.offset >= event.offset or previous.offset >= offset:
                 delete_events.put(previous.time)
-            previous = event[0]
+            previous = event
         length = delete_events.qsize()
         while length > 0:
             linear_send_events.pop(delete_events.get(), None)
@@ -353,6 +355,7 @@ class SyncedTrace(Trace):
         
         # Repair times
         # All events can be shifted by the offset
+        last_event = self._data_list.pop()
         if not linear_send_events:
             for index, event in enumerate(self._data_list):
                 event[1] = event[1] + offset
@@ -361,11 +364,46 @@ class SyncedTrace(Trace):
                     origin_id = self._receive_send_table[index].origin_id
                     self.tracelog.traces[origin_id].refill_receive_time(send_time, \
                                                                         event[1], \
-                                                                        self.process_id)
+                                                                        self.process_id, \
+                                                                        False)
             new_send_events = OrderedDict()
-            #TODO: oprava self.send_events a pripad kdy linear_send_events neni prazdny
-#             for time, event in self.send_events.iteritems():
-#                 for
+            # Update self.send_events
+            for time, events in self.send_events.iteritems():
+                for e in events:
+                    e.offset -= offset
+                time += offset
+                new_send_events[time] = events
+                self.last_refilled_send_time = time
+            self.send_events = new_send_events
+        # Time repair is done in intervals with growing offset
+        else:
+            send_event = linear_send_events.popitem(False)
+            local_offset = send_event[1].offset
+            new_send_events = OrderedDict()
+            for index, event in enumerate(self._data_list):
+                event[1] += local_offset
+                if event[1] == send_event[0]:
+                    for e in self.send_events[send_event[0]]:
+                        e.offset -= local_offset
+                    time = send_event[0] + local_offset
+                    new_send_events[time] = self.send_events[send_event[0]]
+                    self.last_refilled_send_time = time
+                    if linear_send_events:
+                        send_event = linear_send_events.popitem(False)
+                        local_offset = send_event[1].offset
+                    else:
+                        send_event = (0)
+                        local_offset = offset
+                if event[0] == "R":
+                    send_time = self._receive_send_table[index].send_time
+                    origin_id = self._receive_send_table[index].origin_id
+                    self.tracelog.traces[origin_id].refill_receive_time(send_time, \
+                                                                        event[1], \
+                                                                        self.process_id, \
+                                                                        False)
+            self.send_events = new_send_events
+            
+        self._data_list.append(last_event)
         
     def is_backward_amortization(self):
         """ Returns True if the backward amortization is going to be done """
@@ -377,7 +415,7 @@ class SyncedTrace(Trace):
         send_time = 0
         sender = self.get_msg_sender()
         try:
-            send_time = self.tracelog.messages[sender][self.process_id].get_and_keep()
+            send_time = self.tracelog.messages[sender][self.process_id].get_and_keep()[1]
         except Empty:
             return False
         
@@ -409,20 +447,23 @@ class SyncedTrace(Trace):
         self._is_backward_amortization = True
         return True
     
-    def refill_receive_time(self, send_time, receive_time, receiver):
+    def refill_receive_time(self, send_time, receive_time, receiver, new_record=True):
         """ Backward amortization - adds receive time for a specific send time 
             and compute maximum offset
             
             Arguments:
             send_time -- time of a corresponding send event
             receive_time -- time of a receipt of the msg to be filled
+            new_record -- if True you are adding missing receive time otherwise \
+                            you are updating an existing receive time
         """
         for event in self.send_events[send_time]:
             if event.receiver == receiver:
                 event.receive = receive_time
                 event.offset = receive_time - \
                     self.tracelog.minimum_msg_delay - send_time
-                self.last_refilled_send_time = send_time
+                if new_record:
+                    self.last_refilled_send_time = send_time
                 break
     
     def export_data(self):
