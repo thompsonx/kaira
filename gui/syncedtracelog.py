@@ -16,9 +16,10 @@ class SyncedTraceLog (TraceLog):
         """ Creates new SyncedTraceLog object, different method is used 
             according to passed argument.
             
-            Key: 'fromtracelog' -> Value: Tuple( TraceLog object, Settings tuple(
+            Key: 'fromtracelog' -> Value: Tuple( TraceLog object, Settings' tuple(
                                                 min_event_diff, min_msg_delay, 
-                                                init_times, forward_amort) )
+                                                init_times, forward_amort, 
+                                                backward_amort) )
                 Creates new SyncedTraceLog object from an existing TraceLog object
             Key: 'fromfile' -> Value: Path to a *.kst
                 Loads existing *.kst file and creates new SyncedTraceLog object
@@ -55,7 +56,7 @@ class SyncedTraceLog (TraceLog):
             self.minimal_event_diff = settings[0]
             self.minimum_msg_delay = settings[1]
             self.forward_amort = settings[3]
-            self.backward_amort = False
+            self.backward_amort = settings[4]
     
 #             self.first_runinstance = RunInstance(self.project, self.process_count)
             

@@ -31,6 +31,9 @@ class TracelogSync(extensions.Operation):
             w.add_checkbutton("forward_amort", 
                               "Apply the forward amortization", 
                               False)
+            w.add_checkbutton("backward_amort", 
+                              "Apply the backward amortization", 
+                              False)
             return w
         
         assistant.append_setting_widget("Synchronization settings", page)
@@ -41,7 +44,8 @@ class TracelogSync(extensions.Operation):
         return (assistant.get_setting("min_event_diff"), 
                 assistant.get_setting("min_msg_delay"),
                 assistant.get_setting("init_times"), 
-                assistant.get_setting("forward_amort"))
+                assistant.get_setting("forward_amort"),
+                assistant.get_setting("backward_amort"))
 
     def run(self, app, tracelog):
         
