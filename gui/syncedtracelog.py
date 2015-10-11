@@ -326,9 +326,10 @@ class SyncedTrace(Trace):
     def _forward_amortization(self, origin_time, new_time):
         """ Checks shift of a receive event. If a shift exists the time offset 
             is increased to keep the spacing between two events """
-        if new_time > origin_time or new_time > \
+        if new_time > origin_time and new_time > \
         (self.last_event_time + self.tracelog.minimal_event_diff):
-            self.time_offset += (new_time - origin_time)
+            self.time_offset += (new_time - max([origin_time, \
+            self.last_event_time + self.tracelog.minimal_event_diff]))
     
     def _backward_amortization(self, origin_time, new_time):
         offset = new_time - origin_time
@@ -382,7 +383,6 @@ class SyncedTrace(Trace):
             local_offset = send_event[1].offset
             new_send_events = OrderedDict()
             for index, event in enumerate(self._data_list):
-                event[1] += local_offset
                 if event[1] == send_event[0]:
                     for e in self.send_events[send_event[0]]:
                         e.offset -= local_offset
@@ -393,8 +393,9 @@ class SyncedTrace(Trace):
                         send_event = linear_send_events.popitem(False)
                         local_offset = send_event[1].offset
                     else:
-                        send_event = (0)
+                        send_event = [0]
                         local_offset = offset
+                event[1] += local_offset
                 if event[0] == "R":
                     send_time = self._receive_send_table[index].send_time
                     origin_id = self._receive_send_table[index].origin_id
@@ -420,7 +421,7 @@ class SyncedTrace(Trace):
         except Empty:
             return False
         
-        origin_time = self.get_next_event_time() + self.time_offset
+        origin_time = self.get_next_event_time()
         new_time = max([send_time + self.tracelog.minimum_msg_delay, origin_time, \
                            self.last_event_time + \
                            self.tracelog.minimal_event_diff])
@@ -444,6 +445,7 @@ class SyncedTrace(Trace):
             for e in self.send_events[t]:
                 if e.receive == 0:
                     self._missing_receive_time_process_id = e.receiver
+                    self._is_backward_amortization = False
                     return False
         self._is_backward_amortization = True
         return True
@@ -569,6 +571,7 @@ class SyncedTrace(Trace):
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(self._data_list[-1])
             send_event = SendEvent()
+            send_event.time = time
             send_event.receiver = target_id
             if time not in self.send_events.keys():
                 self.send_events[time] = [send_event]
@@ -610,7 +613,7 @@ class SyncedTrace(Trace):
         
         send_event = self.tracelog.messages[origin_id][self.process_id].get()
         send_time = send_event[1]
-        self._receive_send_table[ len(self._data_list) ] = RSTableElement(send_event, origin_id)
+        self._receive_send_table[ len(self._data_list) - 1 ] = RSTableElement(send_event, origin_id)
         time = self._clock_check(time, pointer1, False, True, send_time)
         self.last_received_send_time = send_time
         
@@ -705,6 +708,7 @@ class SQueue(Queue):
 
 class SendEvent(object):
     def  __init__(self):
+        self.time = 0
         self.receive = 0
         self.receiver = None
         self.offset = 0
@@ -713,4 +717,7 @@ class RSTableElement(object):
     def __init__(self, send_event, origin_id):
         self.send_event = send_event
         self.origin_id = origin_id
+    @property
+    def send_time(self):
+        return self.send_event[1]
     
