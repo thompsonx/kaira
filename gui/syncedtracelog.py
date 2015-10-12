@@ -212,11 +212,11 @@ class SyncedTraceLog (TraceLog):
                         current_p = processes[0]
                     print "REMOVE"
          
-        print "------TRACES-------"
-        for t in self.traces:
-            print "TRACE {0}".format(t.process_id)
-            for c in t.output:
-                print c
+#         print "------TRACES-------"
+#         for t in self.traces:
+#             print "TRACE {0}".format(t.process_id)
+#             for c in t.output:
+#                 print c
                 
     
     def export_to_file(self, filename):
@@ -317,6 +317,7 @@ class SyncedTrace(Trace):
         if self.tracelog.forward_amort:
             self._forward_amortization(time, newtime)
         if self._is_backward_amortization:
+#             print "\nBA " + str(self.process_id)
             self._backward_amortization(time, newtime)
         
         self.last_event_time = newtime
@@ -330,10 +331,15 @@ class SyncedTrace(Trace):
         (self.last_event_time + self.tracelog.minimal_event_diff):
             self.time_offset += (new_time - max([origin_time, \
             self.last_event_time + self.tracelog.minimal_event_diff]))
+#             print "\nFA" + str(self.process_id)
     
     def _backward_amortization(self, origin_time, new_time):
         offset = new_time - origin_time
         linear_send_events = copy.deepcopy(self.send_events)
+#         if self.process_id == 0:
+#             print "BEFORE SEND EVENTS"
+#             for time in self.send_events.keys():
+#                             print str(time) + ", " 
         # Reduces collective messages into one
         for t in linear_send_events.keys():
             send_events = self.send_events[t]
@@ -347,6 +353,7 @@ class SyncedTrace(Trace):
         delete_events = Queue()
         previous = SendEvent()
         for time, event in linear_send_events.iteritems():
+            event.time = time
             if previous.offset >= event.offset or previous.offset >= offset:
                 delete_events.put(previous.time)
             previous = event
@@ -359,7 +366,10 @@ class SyncedTrace(Trace):
         # All events can be shifted by the offset
         last_event = self._data_list.pop()
         if not linear_send_events:
+#             print "\nBA FULL OFFSET"
             for index, event in enumerate(self._data_list):
+#                 if self.process_id == 0:
+#                         print "\nSend BEFORE: " + str(self._data_list[index][1])
                 event[1] = event[1] + offset
                 if event[0] == "R":
                     send_time = self._receive_send_table[index].send_time
@@ -368,14 +378,16 @@ class SyncedTrace(Trace):
                                                                         event[1], \
                                                                         self.process_id, \
                                                                         False)
+#                 if self.process_id == 0:
+#                         print "Send AFTER: " + str(self._data_list[index][1])
             new_send_events = OrderedDict()
             # Update self.send_events
             for time, events in self.send_events.iteritems():
+                time1 = time + offset
                 for e in events:
                     e.offset -= offset
-                time += offset
-                new_send_events[time] = events
-                self.last_refilled_send_time = time
+                new_send_events[time1] = events
+                self.last_refilled_send_time = time1
             self.send_events = new_send_events
         # Time repair is done in intervals with growing offset
         else:
@@ -383,29 +395,48 @@ class SyncedTrace(Trace):
             local_offset = send_event[1].offset
             new_send_events = OrderedDict()
             for index, event in enumerate(self._data_list):
-                if event[1] == send_event[0]:
-                    for e in self.send_events[send_event[0]]:
+                if event[0] == "M":
+#                     if self.process_id == 0:
+#                         print "\nSend BEFORE: " + str(self._data_list[index][1])
+                    tmp_time = event[1]
+                    time = event[1] + local_offset
+                    event[1] += local_offset
+                    new_send_events[time] = []
+                    for e in self.send_events[tmp_time]:
                         e.offset -= local_offset
-                    time = send_event[0] + local_offset
-                    new_send_events[time] = self.send_events[send_event[0]]
+                        new_send_events[time].append(e)
                     self.last_refilled_send_time = time
-                    if linear_send_events:
-                        send_event = linear_send_events.popitem(False)
-                        local_offset = send_event[1].offset
-                    else:
-                        send_event = [0]
-                        local_offset = offset
-                event[1] += local_offset
+                    if tmp_time == send_event[0]:
+                        if linear_send_events:
+                            send_event = linear_send_events.popitem(False)
+                            local_offset = send_event[1].offset
+                        else:
+                            send_event = [0]
+                            local_offset = offset
+#                     if self.process_id == 0:
+#                         print "Send AFTER: " + str(self._data_list[index][1])
+                else:
+                    event[1] += local_offset
                 if event[0] == "R":
                     send_time = self._receive_send_table[index].send_time
                     origin_id = self._receive_send_table[index].origin_id
+#                     if origin_id == 0:
+#                         for e in self.tracelog.traces[origin_id]._data_list:
+#                             print str(e[1]) + ", "
+#                         print "\n"
+#                         for time in self.tracelog.traces[origin_id].send_events.keys():
+#                             print str(time) + ", " 
                     self.tracelog.traces[origin_id].refill_receive_time(send_time, \
-                                                                        event[1], \
-                                                                        self.process_id, \
-                                                                        False)
+                                                                    event[1], \
+                                                                    self.process_id, \
+                                                                    False)
             self.send_events = new_send_events
             
         self._data_list.append(last_event)
+#         if self.process_id == 0:
+#             print "AFTER SEND EVENTS"
+#             for time in self.send_events.keys():
+#                             print str(time) + ", " 
         
     def is_backward_amortization(self):
         """ Returns True if the backward amortization is going to be done """
@@ -571,7 +602,6 @@ class SyncedTrace(Trace):
         for target_id in target_ids:
             self.tracelog.messages[self.process_id][target_id].put(self._data_list[-1])
             send_event = SendEvent()
-            send_event.time = time
             send_event.receiver = target_id
             if time not in self.send_events.keys():
                 self.send_events[time] = [send_event]
