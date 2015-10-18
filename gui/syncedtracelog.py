@@ -365,73 +365,39 @@ class SyncedTrace(Trace):
         # Repair times
         # All events can be shifted by the offset
         last_event = self._data_list.pop()
-        if not linear_send_events:
-#             print "\nBA FULL OFFSET"
-            for index, event in enumerate(self._data_list):
-#                 if self.process_id == 0:
-#                         print "\nSend BEFORE: " + str(self._data_list[index][1])
-                event[1] = event[1] + offset
-                if event[0] == "R":
-                    send_time = self._receive_send_table[index].send_time
-                    origin_id = self._receive_send_table[index].origin_id
-                    self.tracelog.traces[origin_id].refill_receive_time(send_time, \
-                                                                        event[1], \
-                                                                        self.process_id, \
-                                                                        False)
-#                 if self.process_id == 0:
-#                         print "Send AFTER: " + str(self._data_list[index][1])
-            new_send_events = OrderedDict()
-            # Update self.send_events
-            for time, events in self.send_events.iteritems():
-                time1 = time + offset
-                for e in events:
-                    e.offset -= offset
-                new_send_events[time1] = events
-                self.last_refilled_send_time = time1
-            self.send_events = new_send_events
-        # Time repair is done in intervals with growing offset
-        else:
+        send_event = [0]
+        local_offset = offset
+        if linear_send_events:
             send_event = linear_send_events.popitem(False)
             local_offset = send_event[1].offset
-            new_send_events = OrderedDict()
-            for index, event in enumerate(self._data_list):
-                if event[0] == "M":
-#                     if self.process_id == 0:
-#                         print "\nSend BEFORE: " + str(self._data_list[index][1])
-                    tmp_time = event[1]
-                    time = event[1] + local_offset
-                    event[1] += local_offset
-                    new_send_events[time] = []
-                    for e in self.send_events[tmp_time]:
-                        e.offset -= local_offset
-                        new_send_events[time].append(e)
-                    self.last_refilled_send_time = time
-                    if tmp_time == send_event[0]:
-                        if linear_send_events:
-                            send_event = linear_send_events.popitem(False)
-                            local_offset = send_event[1].offset
-                        else:
-                            send_event = [0]
-                            local_offset = offset
-#                     if self.process_id == 0:
-#                         print "Send AFTER: " + str(self._data_list[index][1])
-                else:
-                    event[1] += local_offset
-                if event[0] == "R":
-                    send_time = self._receive_send_table[index].send_time
-                    origin_id = self._receive_send_table[index].origin_id
-#                     if origin_id == 0:
-#                         for e in self.tracelog.traces[origin_id]._data_list:
-#                             print str(e[1]) + ", "
-#                         print "\n"
-#                         for time in self.tracelog.traces[origin_id].send_events.keys():
-#                             print str(time) + ", " 
-                    self.tracelog.traces[origin_id].refill_receive_time(send_time, \
+        new_send_events = OrderedDict()
+        for index, event in enumerate(self._data_list):
+            if event[0] == "M":
+                tmp_time = event[1]
+                time = tmp_time + local_offset
+                event[1] = time
+                new_send_events[time] = []
+                for e in self.send_events[tmp_time]:
+                    e.offset -= local_offset
+                    new_send_events[time].append(e)
+                self.last_refilled_send_time = time
+                if tmp_time == send_event[0]:
+                    if linear_send_events:
+                        send_event = linear_send_events.popitem(False)
+                        local_offset = send_event[1].offset
+                    else:
+                        send_event = [0]
+                        local_offset = offset
+            else:
+                event[1] += local_offset
+            if event[0] == "R":
+                send_time = self._receive_send_table[index].send_time
+                origin_id = self._receive_send_table[index].origin_id
+                self.tracelog.traces[origin_id].refill_receive_time(send_time, \
                                                                     event[1], \
                                                                     self.process_id, \
                                                                     False)
-            self.send_events = new_send_events
-            
+        self.send_events = new_send_events
         self._data_list.append(last_event)
 #         if self.process_id == 0:
 #             print "AFTER SEND EVENTS"
