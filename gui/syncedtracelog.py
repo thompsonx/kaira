@@ -357,6 +357,9 @@ class SyncedTrace(Trace):
             if previous.offset >= event.offset or previous.offset >= offset:
                 delete_events.put(previous.time)
             previous = event
+        # Last event is not checked in the loop above, this checks it
+        if previous.offset >= offset:
+            delete_events.put(previous.time)
         length = delete_events.qsize()
         while length > 0:
             linear_send_events.pop(delete_events.get(), None)
