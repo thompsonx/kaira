@@ -193,7 +193,7 @@ class SyncedTraceLog (TraceLog):
                                 trace.process_next()
                                 #Backward amortization - add receive time and maximum offset
                                 self.traces[sender].refill_receive_time(trace.last_received_send_time,\
-                                                                         trace.last_event_time,\
+                                                                         trace.last_receive_event_time,\
                                                                          working_p) 
                             else:
                                 trace.process_next()                                        
@@ -256,6 +256,7 @@ class SyncedTrace(Trace):
         self.send_events = OrderedDict()
         self.last_received_send_time = 0
         self.last_refilled_send_time = None
+        self.last_receive_event_time = 0
         self._missing_receive_time_process_id = None
         self._is_backward_amortization = False
         self._receive_send_table = {}
@@ -321,6 +322,7 @@ class SyncedTrace(Trace):
             self._backward_amortization(time, newtime)
         
         self.last_event_time = newtime
+        self.last_receive_event_time = newtime
         
         return newtime
         
@@ -335,6 +337,8 @@ class SyncedTrace(Trace):
     
     def _backward_amortization(self, origin_time, new_time):
         offset = new_time - origin_time
+#         if self.process_id == 0:
+#             print "Receive: {0} Origin: {1} Offset: {2}".format(new_time, origin_time, offset)
         linear_send_events = copy.deepcopy(self.send_events)
 #         if self.process_id == 0:
 #             print "BEFORE SEND EVENTS"
@@ -375,6 +379,8 @@ class SyncedTrace(Trace):
             local_offset = send_event[1].offset
         new_send_events = OrderedDict()
         for index, event in enumerate(self._data_list):
+#             if local_offset < 0:
+#                 raise Exception("Zaporny")
             if event[0] == "M":
                 tmp_time = event[1]
                 time = tmp_time + local_offset
@@ -382,6 +388,8 @@ class SyncedTrace(Trace):
                 new_send_events[time] = []
                 for e in self.send_events[tmp_time]:
                     e.offset -= local_offset
+#                     if e.offset < 0:
+#                         raise Exception("Zaporny novy offset")
                     new_send_events[time].append(e)
                 self.last_refilled_send_time = time
                 if tmp_time == send_event[0]:
@@ -462,9 +470,13 @@ class SyncedTrace(Trace):
         """
         for event in self.send_events[send_time]:
             if event.receiver == receiver:
+#                 tmpr = event.receive
                 event.receive = receive_time
+#                 tmpo = event.offset
                 event.offset = receive_time - \
                     self.tracelog.minimum_msg_delay - send_time
+#                 if event.offset < 0:
+#                     raise Exception("Refilled Negative, Origin receive: {0}, offset: {1}; New rec: {2} offset {3}, receiver {4}, sender {5}".format(tmpr, tmpo, event.receive, event.offset, receiver, self.process_id))
                 if new_record:
                     self.last_refilled_send_time = send_time
                 break
