@@ -162,9 +162,10 @@ class SyncedTraceLog (TraceLog):
         
         # Use processes' init times from tracelog to count their time offsets
         if init_times:
-            starttime = min([ trace.get_init_time() for trace in self.traces ])
+            starttime = max([ trace.get_init_time() for trace in self.traces ])
             for trace in self.traces:
-                trace.time_offset = trace.get_init_time() - starttime
+                trace.time_offset = starttime - trace.get_init_time()
+                trace.set_init_time(trace.time_offset)
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
@@ -497,7 +498,19 @@ class SyncedTrace(Trace):
         """ Get the id of a process of which the time of a receive event was 
         missing during the are_receive_times_refilled() method"""
         return self._missing_receive_time_process_id
-            
+    
+    def set_init_time(self, increment):
+        """ Increase initial time of a process by the increment value
+        
+            Arguments:
+            increment -- an integer value which is added to the initial time        
+        """
+        origin = self.info["inittime"]
+        newtime = str(int(origin) + increment)
+        self.info["inittime"] = newtime
+        self._header_info = self._header_info.replace(origin, newtime)
+        
+    
     def get_msg_sender(self):
         if self.get_next_event_name() == "Recv ":
             tmp_pointer = self.pointer
