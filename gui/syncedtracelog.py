@@ -9,7 +9,6 @@ from table import Table
 from Queue import Queue, Empty
 from collections import OrderedDict
 from cStringIO import StringIO
-from gtk._gtk import target_list_add_image_targets
            
 class SyncedTraceLog (TraceLog):
     
