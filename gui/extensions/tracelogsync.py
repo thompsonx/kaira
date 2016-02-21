@@ -25,15 +25,12 @@ class TracelogSync(extensions.Operation):
             w.add_positive_int("min_msg_delay", 
                       "Minimum message delay of messages from one process to another [ns]: ", 
                       "10")
-            w.add_checkbutton("init_times", 
-                              "Use processes' init times from tracelog to count their time offsets", 
-                              False)
             w.add_checkbutton("forward_amort", 
                               "Apply the forward amortization", 
-                              False)
+                              True)
             w.add_checkbutton("backward_amort", 
                               "Apply the backward amortization", 
-                              False)
+                              True)
             return w
         
         assistant.append_setting_widget("Synchronization settings", page)
@@ -42,8 +39,7 @@ class TracelogSync(extensions.Operation):
             return
         
         return (assistant.get_setting("min_event_diff"), 
-                assistant.get_setting("min_msg_delay"),
-                assistant.get_setting("init_times"), 
+                assistant.get_setting("min_msg_delay"), 
                 assistant.get_setting("forward_amort"),
                 assistant.get_setting("backward_amort"))
 

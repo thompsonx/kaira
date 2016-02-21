@@ -18,8 +18,7 @@ class SyncedTraceLog (TraceLog):
             
             Key: 'fromtracelog' -> Value: Tuple( TraceLog object, Settings' tuple(
                                                 min_event_diff, min_msg_delay, 
-                                                init_times, forward_amort, 
-                                                backward_amort) )
+                                                forward_amort, backward_amort) )
                 Creates new SyncedTraceLog object from an existing TraceLog object
             Key: 'fromfile' -> Value: Path to a *.kst
                 Loads existing *.kst file and creates new SyncedTraceLog object
@@ -52,8 +51,8 @@ class SyncedTraceLog (TraceLog):
             
             self.minimal_event_diff = settings[0]
             self.minimum_msg_delay = settings[1]
-            self.forward_amort = settings[3]
-            self.backward_amort = settings[4]
+            self.forward_amort = settings[2]
+            self.backward_amort = settings[3]
             
             self.traces = []
             messenger = Messenger(self)
@@ -72,7 +71,7 @@ class SyncedTraceLog (TraceLog):
     
 #             self.first_runinstance = RunInstance(self.project, self.process_count)
             
-            self._synchronize(settings[2])
+            self._synchronize()
             
     
     def _from_file(self, filename):
@@ -161,20 +160,16 @@ class SyncedTraceLog (TraceLog):
         self.missed_receives = ri.missed_receives
     
            
-    def _synchronize(self, init_times=True):
+    def _synchronize(self):
         """ Main feature of this class. It controls whole synchronization procedure 
-            
-            Arguments:
-            init_times -- True/False - if True it will use processes' init times
-                             from tracelog to count their time offsets
         """
         
-        # Use processes' init times from tracelog to count their time offsets
-        if init_times:
-            starttime = max([ trace.get_init_time() for trace in self.traces ])
-            for trace in self.traces:
-                trace.time_offset = starttime - trace.get_init_time()
-                trace.set_init_time(trace.time_offset)
+        # Make an init time of the process with the lowest init time reference
+        # time for all events from all processes
+        starttime = min([ trace.get_init_time() for trace in self.traces ])
+        for trace in self.traces:
+            trace.time_offset = trace.get_init_time() - starttime
+#             trace.set_init_time(trace.time_offset)
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
@@ -522,16 +517,16 @@ class SyncedTrace(Trace):
         missing during the are_receive_times_refilled() method"""
         return self._missing_receive_time_process_id
     
-    def set_init_time(self, increment):
-        """ Increase initial time of a process by the increment value
-        
-            Arguments:
-            increment -- an integer value which is added to the initial time        
-        """
-        origin = self.info["inittime"]
-        newtime = str(int(origin) + increment)
-        self.info["inittime"] = newtime
-        self._header_info = self._header_info.replace(origin, newtime)
+#     def set_init_time(self, increment):
+#         """ Increase initial time of a process by the increment value
+#         
+#             Arguments:
+#             increment -- an integer value which is added to the initial time        
+#         """
+#         origin = self.info["inittime"]
+#         newtime = str(int(origin) + increment)
+#         self.info["inittime"] = newtime
+#         self._header_info = self._header_info.replace(origin, newtime)
         
     
     def get_msg_sender(self):
