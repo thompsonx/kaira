@@ -61,6 +61,7 @@ class SyncedTraceLog (TraceLog):
                                      self.minimal_event_diff, \
                                      self.minimum_msg_delay, \
                                      self.forward_amort, \
+                                     self.backward_amort, \
                                      self.messages, \
                                      messenger)
                 self.traces.append(strace)
@@ -259,12 +260,14 @@ class SyncedTrace(Trace):
     def __init__(self, data, process_id, pointer_size, minimal_event_diff, \
                                      minimum_msg_delay, \
                                      forward_amort, \
+                                     backward_amort, \
                                      messages, \
                                      messenger):
         Trace.__init__(self, data, process_id, pointer_size)
         self._minimal_event_diff = minimal_event_diff
         self._minimum_msg_delay = minimum_msg_delay
         self._forward_amort = forward_amort
+        self._backward_amort = backward_amort
         self._messages = messages
         self._messenger = messenger
         self._data_list = []
@@ -434,8 +437,10 @@ class SyncedTrace(Trace):
 #             for time in self._send_events.keys():
 #                             print str(time) + ", " 
         
-    def is_backward_amortization(self):
-        """ Returns True if the backward amortization is going to be done """
+    def _predict_backward_amortization(self):
+        """ Returns True if the backward amortization should be done """
+        if not self._backward_amort:
+            return False
         if not self.get_next_event_name() == "Recv ":
             return False
         if self._last_event_time == 0:
@@ -445,7 +450,10 @@ class SyncedTrace(Trace):
         sender = self.get_msg_sender()
         try:
             send_time = self._messages[sender][self.process_id].get_and_keep()[1]
-        except Empty:
+        except:
+            print "Failed to load a send time from the shared variable messages.\
+                 Sender: {0}, Receiver: {1}, Received time: {2}"\
+                 .format(sender, self.process_id, self.get_next_event_time())
             return False
         
         origin_time = self.get_next_event_time()
@@ -460,8 +468,9 @@ class SyncedTrace(Trace):
     
     def are_receive_times_refilled(self):
         """ Returns True if all current send events (SendEvent send_events) have 
-        refilled the receive time field """
-        if not self.is_backward_amortization():
+        refilled the receive time field. THIS MUST BE CALLED BEFORE EACH 
+        RECEIVE EVENT'S PROCESSING IF THE BACKWARD AMORTIZATION IS TURNED ON!"""
+        if not self._predict_backward_amortization():
             self._is_backward_amortization = False
             return True
         times = self._send_events.keys()
