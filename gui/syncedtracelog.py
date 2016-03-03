@@ -1,12 +1,9 @@
 import xml.etree.ElementTree as xml
 import loader
-import utils
 import copy 
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
-from exportri import ExportRunInstance, place_counter_name
-from table import Table
-from Queue import Queue, Empty
+from Queue import Queue
 from collections import OrderedDict
 from cStringIO import StringIO
            
@@ -23,6 +20,8 @@ class SyncedTraceLog (TraceLog):
             Key: 'fromfile' -> Value: Path to a *.kst
                 Loads existing *.kst file and creates new SyncedTraceLog object
         """
+        TraceLog.__init__(self, None, False, False)
+        
         if "fromtracelog" in kwargs:
             self._syncing = True         
             self._from_tracelog(kwargs["fromtracelog"][0], kwargs["fromtracelog"][1])
@@ -105,61 +104,13 @@ class SyncedTraceLog (TraceLog):
 
         self.first_runinstance = RunInstance(self.project, self.process_count)
         
-        self._preprocess()
-    
-    def _preprocess(self):
+        self._preprocess(False)
         
-        trace_times = [ trace.get_next_event_time() for trace in self.traces ]
+    def _read_header(self):
+        pass
 
-        if self.export_data:
-            place_counters = [place_counter_name(p)
-                              for p in self.project.nets[0].places()
-                              if p.trace_tokens]
-
-            ri = ExportRunInstance(
-                self,
-                [ t for t in self.project.nets[0].transitions() if t.trace_fire ],
-                [ (p, i) for p in self.project.nets[0].places()
-                         for i, tracing in enumerate(p.trace_tokens_functions)
-                         if tracing.return_numpy_type != 'O' ],
-                ExportRunInstance.basic_header + place_counters)
-        else:
-            ri = RunInstance(
-                self.project, self.process_count)
-
-        index = 0
-        timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
-        full_timeline = Table([("process", "<i4"), ("pointer", "<i4")], 100)
-        while True:
-
-            # Searching for trace with minimal event time
-            minimal_time_index = utils.index_of_minimal_value(trace_times)
-            if minimal_time_index is None:
-                break
-
-            trace = self.traces[minimal_time_index]
-
-            full_timeline.add_row((minimal_time_index, trace.pointer))
-
-            # Timeline update
-            if trace.is_next_event_visible():
-                timeline.add_row(full_timeline[index])
-
-            trace.process_event(ri)
-            trace_times[minimal_time_index] = trace.get_next_event_time()
-
-            index += 1
-
-        self.data = Table([], 0)
-        if self.export_data:
-            self.data = ri.get_table()
-
-        timeline.trim()
-        full_timeline.trim()
-        self.timeline, self.full_timeline = timeline, full_timeline
-
-        self.missed_receives = ri.missed_receives
-    
+    def _read_trace(self, process_id):
+        pass
            
     def _synchronize(self):
         """ Main feature of this class. It controls whole synchronization procedure 
@@ -196,18 +147,18 @@ class SyncedTraceLog (TraceLog):
                                     current_p = trace.get_missing_receive_time_process_id()
                                     break
                                 
-                                trace.process_next()
+                                trace.process_event()
                                 #Backward amortization - add receive time and maximum offset
                                 self.traces[sender].refill_receive_time(trace.get_last_received_send_time(),\
                                                                          trace.get_last_receive_event_time(),\
                                                                          working_p) 
                             else:
-                                trace.process_next()                                        
+                                trace.process_event()                                        
                         else:
                             current_p = sender
                         print "RECV"
                     else:
-                        trace.process_next()
+                        trace.process_event()
                         print "NORMAL"
                 else:
                     processes.remove(current_p)
@@ -570,188 +521,57 @@ class SyncedTrace(Trace):
         if end_pointer is False:
             end_pointer = self.pointer
         event.append( self.data[ start_pointer : end_pointer ] )
-    
-    def _process_end(self):
-        t = self.data[self.pointer]
-        if t != "X":
-            return
-        self._data_list.append([t])
-        self.pointer += 1
-        pointer1 = self.pointer
-        values = self.struct_basic.unpack_from(self.data, self.pointer)
-        self.pointer += self.struct_basic.size
-        
-        time = self._clock_check(values[0], pointer1)
-        
-        
-        self.output.append(str(self.process_id) + ' ' + t + ' ' + str(time))
-        print str(self.process_id) + ' ' + t + ' ' + str(time)
-        
 
-    def _process_event_transition_fired(self):        
-        ptr = self.pointer                    
-        time, transition_id = self._read_struct_transition_fired()
-        pointer1 = self.pointer
-        self._read_transition_trace_function_data()
-        pointer2 = self.pointer
-        time = self._clock_check(time, ptr, pointer2)
-        self.pointer = pointer1
-        
-        self.output.append(str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time))
-        print str(self.process_id) + " TransS " + str(transition_id) + ' ' + str(time)
-        
-        # Possible duplicate - return back with pointer2 and process once again
-        self.process_tokens_remove()
-        self.pointer = pointer2
-        self._process_event_quit()
-        self.process_tokens_add()
-        self._process_end()
 
-    def _process_event_transition_finished(self):
-        pointer1 = self.pointer
-        time = self._read_struct_transition_finished()[0]
+    def _extra_time(self, time, pointer, receive=False, origin_id=None):
+        """ Calls functions for time synchronization
         
-        time = self._clock_check(time, pointer1)
-        
-        self.output.append(str(self.process_id) + " TransF " + str(time))
-        print str(self.process_id) + " TransF " + str(time)
-                                              
-        self._process_event_quit()
-        self.process_tokens_add()
-        self._process_end()
-
-    def _process_event_send(self):
-        pointer1 = self.pointer
-        time, size, edge_id, target_ids = self._read_struct_send()
-        
-        time = self._clock_check(time, pointer1)
-        
-        for target_id in target_ids:
-            self._messages[self.process_id][target_id].put(self._data_list[-1])
-            send_event = SendEvent()
-            send_event.receiver = target_id
-            if time not in self._send_events.keys():
-                self._send_events[time] = [send_event]
-            else:
-                self._send_events[time].append(send_event)
-            
-        self.output.append(str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time))
-        print str(self.process_id) + " Send " + str(target_id) + ' ' + str(edge_id) + ' ' + str(time)
-
-    def _process_event_spawn(self):
-        pointer1 = self.pointer
-        time, net_id = self._read_struct_spawn()
-        
-        time = self._clock_check(time, pointer1)
-        
-        self.output.append(str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time))
-        print str(self.process_id) + " Spawn " + ' ' + str(net_id) + ' ' +str(time)
-        
-        self.process_tokens_add()
-
-    def _process_event_quit(self):
-        t = self.data[self.pointer]
-        if t != "Q":
-            return
-        self._data_list.append([t])
-        self.pointer += 1
-        
-        pointer = self.pointer
-        time = self._read_struct_quit()[0]
-        
-        time = self._clock_check(time, pointer)
-        
-        self.output.append(str(self.process_id) + " Quit " + str(time))
-        print str(self.process_id) + " Quit " + str(time)
-
-    def _process_event_receive(self):
-        pointer1 = self.pointer
-        time, origin_id = self._read_struct_receive()
-        
-        send_event = self._messages[origin_id][self.process_id].get()
-        send_time = send_event[1]
-        self._receive_send_table[ len(self._data_list) - 1 ] = RSTableElement(send_event, origin_id)
-        time = self._clock_check(time, pointer1, False, True, send_time)
-        self._last_received_send_time = send_time
-        
-        self.output.append(str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time))
-        print str(self.process_id) + " Recv " + str(origin_id) + ' ' + str(time)
-        
-        self.process_tokens_add()
-        self._process_end()
-        
-
-    def _process_event_idle(self):
-        pointer = self.pointer
-        time = self._read_struct_quit()[0]
-        time = self._clock_check(time, pointer)
-        
-        self.output.append(str(self.process_id) + " Idle " + str(time))
-        print str(self.process_id) + " Idle " + str(time)
-        
-    # New runinstance-free methods
-    
-    def process_next(self):
-        t = self.data[self.pointer]
-        self.pointer += 1
-        self._data_list.append([t])
-        if t == "T":
-            self._process_event_transition_fired()
-        elif t == "F":
-            self._process_event_transition_finished()
-        elif t == "R":
-            return self._process_event_receive()
-        elif t == "S":
-            return self._process_event_spawn()
-        elif t == "I":
-            return self._process_event_idle()
-        elif t == "Q":
-            # This is called only when transition that call ctx.quit is not traced
-            self.pointer -= 1 # _process_event_quit expect the pointer at "Q"
-            self._process_event_quit()
+            Arguments:
+            time -- time to be synchronized
+            pointer -- points to the start of event's data
+            receive -- mark True if you want to synchronize receive event
+            origin_id -- if receive is True, specify id of the sender
+        """
+        if not receive:
+            return self._clock_check(time, pointer)
         else:
-            raise Exception("Invalid event type '{0}/{1}' (pointer={2}, process={3})"
-                                .format(t, ord(t), hex(self.pointer), self.process_id))
+            if origin_id is None:
+                raise Exception("Origin_id for a receive event not entered!")
+            send_event = self._messages[origin_id][self.process_id].get()
+            sent_time = send_event[1]
+            self._receive_send_table[ len(self._data_list) - 1 ] = RSTableElement(send_event, origin_id)
+            ctime = self._clock_check(time, pointer, False, True, sent_time)
+            self._last_received_send_time = sent_time
+            return ctime
+
+    def _extra_event_send(self, time, target_id):
+        """ Adds send event to the message queue and to trace's list of sends
+        
+            Arguments:
+            time -- already synchronized time of the send event
+            target_id -- message recipient
+        """
+        self._messages[self.process_id][target_id].put(self._data_list[-1])
+        send_event = SendEvent()
+        send_event.receiver = target_id
+        if time not in self._send_events.keys():
+            self._send_events[time] = [send_event]
+        else:
+            self._send_events[time].append(send_event)
     
-    def process_tokens_add(self):
-        values = []
-        pointer1 = self.pointer
-        last = self._data_list[-1]
-        while not self.is_pointer_at_end():
-            t = self.data[self.pointer]
-            if t == "t":
-                values = []
-                self.pointer += 1
-                self._read_struct_token()
-            elif t == "i":
-                self.pointer += 1
-                value = self._read_struct_int()
-                values.append(value)
-            elif t == "d":
-                self.pointer += 1
-                value = self._read_struct_double()
-                values.append(value)
-            elif t == "s":
-                self.pointer += 1
-                value = self._read_cstring()
-                values.append(value)
-            elif t == "M":
-                self._data_list.append([t])
-                self.pointer += 1
-                self._process_event_send()
-            else:
-                break
+    def _extra_event(self, event):
+        """ Stores event symbol into trace's data """
+        self._data_list.append([event])
+    
+    def _extra_value(self):
+        """ Retrieves record of the last processed event """
+        return self._data_list[-1]
+    
+    def _extra_tokens_add(self, pointer, extra, values):
         if values:
-            last.append(self.data[pointer1:self.pointer])
-    
-    def process_tokens_remove(self):
-        while not self.is_pointer_at_end():
-            t = self.data[self.pointer]
-            if t == "r":
-                self.pointer += 1
-                self._read_struct_token()
-            else:
-                break
+            extra.append(self.data[pointer:self.pointer])
+            
+            
     
 class SQueue(Queue):
     def __init__(self):

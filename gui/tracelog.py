@@ -32,7 +32,9 @@ zero_char = chr(0)
 
 class TraceLog:
 
-    def __init__(self, filename, export_data=False):
+    def __init__(self, filename, export_data=False, init=True):
+        if not init:
+            return
         self.filename = filename
         self.export_data = export_data
         self._read_header()
@@ -136,11 +138,12 @@ class TraceLog:
             trace = Trace(f.read(), process_id, self.pointer_size)
             self.traces[process_id] = trace
 
-    def _preprocess(self):
+    def _preprocess(self, offsets=True):
         # Set time offsets
-        starttime = min([ trace.get_init_time() for trace in self.traces ])
-        for trace in self.traces:
-            trace.time_offset = trace.get_init_time() - starttime
+        if offsets:
+            starttime = min([ trace.get_init_time() for trace in self.traces ])
+            for trace in self.traces:
+                trace.time_offset = trace.get_init_time() - starttime
         trace_times = [ trace.get_next_event_time() for trace in self.traces ]
 
         if self.export_data:
@@ -251,10 +254,12 @@ class Trace:
         elif t == "H" or t == "Q": # "H" for backward compatability
             return "Quit "
 
-    def process_event(self, runinstance):
+    def process_event(self, runinstance=None):
         t = self.data[self.pointer]
         self.pointer += 1
-        runinstance.pre_event()
+        self._extra_event(t)
+        if runinstance is not None:
+            runinstance.pre_event()
         if t == "T":
             self._process_event_transition_fired(runinstance)
         elif t == "F":
@@ -280,10 +285,12 @@ class Trace:
         place_id = None
         token_pointer = None
         values = []
+        pointer1 = self.pointer
+        extra = self._extra_value()
         while not self.is_pointer_at_end():
             t = self.data[self.pointer]
             if t == "t":
-                if place_id is not None:
+                if  runinstance is not None and place_id is not None:
                     runinstance.add_token(place_id, token_pointer, values, send_time)
                 values = []
                 self.pointer += 1
@@ -304,23 +311,27 @@ class Trace:
                 self.pointer += 1
                 self._process_event_send(runinstance)
             else:
-                if place_id is not None and token_pointer is not None:
+                if runinstance is not None and place_id is not None and token_pointer is not None:
                     runinstance.add_token(place_id, token_pointer, values, send_time)
                 break
 
-        if self.is_pointer_at_end() and place_id is not None:
+        if runinstance is not None and self.is_pointer_at_end() and place_id is not None:
             runinstance.add_token(place_id, token_pointer, values, send_time)
-
+        
+        self._extra_tokens_add(pointer1, extra, values)
+        
+        
     def process_tokens_remove(self, runinstance):
         while not self.is_pointer_at_end():
             t = self.data[self.pointer]
             if t == "r":
                 self.pointer += 1
                 token_pointer, place_id = self._read_struct_token()
-                runinstance.remove_token(place_id, token_pointer)
-#             elif t == "M":
-#                 self.pointer += 1
-#                 self._process_event_send(runinstance)
+                if runinstance is not None:
+                    runinstance.remove_token(place_id, token_pointer)
+            elif runinstance is not None and t == "M":
+                self.pointer += 1
+                self._process_event_send(runinstance)
             else:
                 break
 
@@ -379,75 +390,107 @@ class Trace:
         t = self.data[self.pointer]
         if t != "X":
             return
+        self._extra_event(t)
         self.pointer += 1
+        pointer1 = self.pointer
         values = self.struct_basic.unpack_from(self.data, self.pointer)
         self.pointer += self.struct_basic.size
-        runinstance.event_end(self.process_id, values[0] + self.time_offset)
+        self._extra_time(values[0], pointer1)
+        if runinstance is not None:
+            runinstance.event_end(self.process_id, values[0] + self.time_offset)
 
     def _process_event_transition_fired(self, runinstance):
+        ptr = self.pointer
         time, transition_id = self._read_struct_transition_fired()
         pointer1 = self.pointer
         values = self._read_transition_trace_function_data()
         pointer2 = self.pointer
-        self.pointer = pointer1
-        runinstance.transition_fired(self.process_id,
-                                     time + self.time_offset,
-                                     transition_id,
-                                     values)
-        self.process_tokens_remove(runinstance)
-        self.pointer = pointer2
+        self._extra_time(time, ptr)
+        
+        if runinstance is not None:
+            self.pointer = pointer1
+            runinstance.transition_fired(self.process_id,
+                                         time + self.time_offset,
+                                         transition_id,
+                                         values)
+            self.process_tokens_remove(runinstance)
+            self.pointer = pointer2
+            
         self._process_event_quit(runinstance)
         self.process_tokens_add(runinstance)
         self._process_end(runinstance)
 
     def _process_event_transition_finished(self, runinstance):
+        pointer1 = self.pointer
         time = self._read_struct_transition_finished()[0]
-        runinstance.transition_finished(self.process_id,
-                                        time + self.time_offset)
+        self._extra_time(time, pointer1)
+        if runinstance is not None:
+            runinstance.transition_finished(self.process_id,
+                                            time + self.time_offset)
         self._process_event_quit(runinstance)
         self.process_tokens_add(runinstance)
         self._process_end(runinstance)
 
     def _process_event_send(self, runinstance):
+        self._extra_event("M")
+        pointer1 = self.pointer
         time, size, edge_id, target_ids = self._read_struct_send()
+        extra = self._extra_time(time, pointer1)
         for target_id in target_ids:
-            runinstance.event_send(self.process_id,
-                                   time + self.time_offset,
-                                   target_id,
-                                   size,
-                                   edge_id)
+            self._extra_event_send(extra, target_id)
+            if runinstance is not None:
+                runinstance.event_send(self.process_id,
+                                       time + self.time_offset,
+                                       target_id,
+                                       size,
+                                       edge_id)
 
     def _process_event_spawn(self, runinstance):
+        pointer1 = self.pointer
         time, net_id = self._read_struct_spawn()
-        runinstance.event_spawn(self.process_id,
-                                time + self.time_offset,
-                                net_id)
+        self._extra_time(time, pointer1)
+        if runinstance is not None:
+            runinstance.event_spawn(self.process_id,
+                                    time + self.time_offset,
+                                    net_id)
         self.process_tokens_add(runinstance)
 
     def _process_event_quit(self, runinstance):
         t = self.data[self.pointer]
         if t != "Q":
             return
+        self._extra_event(t)
         self.pointer += 1
+        pointer1 = self.pointer
         time = self._read_struct_quit()[0]
-        runinstance.event_quit(self.process_id,
-                               time + self.time_offset)
+        self._extra_time(time, pointer1)
+        if runinstance is not None:
+            runinstance.event_quit(self.process_id,
+                                   time + self.time_offset)
 
     def _process_event_receive(self, runinstance):
+        pointer1 = self.pointer
         time, origin_id = self._read_struct_receive()
-        send_time = runinstance.event_receive(
-            self.process_id,
-            time + self.time_offset,
-            origin_id
-        ) or 1
+        send_time = 0
+        self._extra_time(time, pointer1, True, origin_id)
+        if runinstance is not None:
+            send_time = runinstance.event_receive(
+                            self.process_id,
+                            time + self.time_offset,
+                            origin_id
+                        ) or 1
+        
 
         self.process_tokens_add(runinstance, send_time)
         self._process_end(runinstance)
 
     def _process_event_idle(self, runinstance):
+        pointer1 = self.pointer
         time = self._read_struct_quit()[0]
-        runinstance.event_idle(self.process_id,
-                               time + self.time_offset)
+        self._extra_time(time, pointer1)
+        if runinstance is not None:
+            runinstance.event_idle(self.process_id,
+                                   time + self.time_offset)
 
     def _read_struct_token(self):
         values = self.struct_token.unpack_from(self.data, self.pointer)
@@ -494,3 +537,19 @@ class Trace:
             else:
                 break
         return values
+
+    def _extra_event(self, event):
+        """ Reserved for extending the behavior in child classes (SyncedTrace)"""
+        pass
+    def _extra_time(self, time, pointer, receive=False, origin_id=None):
+        """ Reserved for extending the behavior in child classes (SyncedTrace)"""
+        return None
+    def _extra_event_send(self, time, target_id):
+        """ Reserved for extending the behavior in child classes (SyncedTrace)"""
+        pass
+    def _extra_tokens_add(self, pointer, extra, values):
+        """ Reserved for extending the behavior in child classes (SyncedTrace)"""
+        pass
+    def _extra_value(self):
+        """ Reserved for extending the behavior in child classes (SyncedTrace)"""
+        return None
