@@ -33,14 +33,21 @@ class VTraceLog(TraceLog):
         
         TraceLog.__init__(self, None, False, False)
         
-        self.messages = [[Queue() for x in range(tracelog.process_count)] for x in range(tracelog.process_count)]
-        self.process_count = tracelog.process_count
+        self.filename = tracelog
+        self._read_header()
+
+        self.traces = [None] * self.process_count
+        for process_id in xrange(self.process_count):
+            self._read_trace(process_id)
         
-        self.traces = []
-        for t in tracelog.traces:
-            self.traces.append(VTrace(t.data, t.process_id, tracelog.pointer_size, 
+        self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]
+        
+        self.vtraces = []
+        for t in self.traces:
+            self.vtraces.append(VTrace(t.data, t.process_id, self.pointer_size, 
                                       self.messages))
-            
+        self.traces = self.vtraces
+        
         self._verify()
         
     def _verify(self):

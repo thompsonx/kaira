@@ -20,6 +20,7 @@
 import extensions
 import datatypes
 import settingswindow
+import gtk
 from gtk import RESPONSE_APPLY
 from tracelogverif import VTraceLog
 
@@ -28,7 +29,28 @@ class TracelogVerifier(extensions.Operation):
     name = "Tracelog verifier"
     description = "Scans tracelog and inspects clock condition violations (send-receive mismatch)"
 
-    parameters = [ extensions.Parameter("Tracelog", datatypes.t_tracelog) ]
+    parameters = [ ] #extensions.Parameter("Tracelog", datatypes.t_tracelog)
+    
+#     def display_settings(self, app):
+#         assistant = settingswindow.BasicSettingAssistant(1, 
+#                                                          "Tracelog verification",
+#                                                           app.window)
+#         assistant.set_size_request(700, 400)
+#         
+#         def page(setting):
+#             w = settingswindow.SettingWidget()
+#             w.add_entry("path", 
+#                       "Path to a tracelog: ",
+#                        "")
+#             return w
+#         
+#         assistant.append_setting_widget("Tracelog verification", page)
+#         
+#         if assistant.run() != RESPONSE_APPLY:
+#             return
+#         
+#         return assistant.get_setting("path")
+    
     
     def display_result(self, app, results):
         assistant = settingswindow.BasicSettingAssistant(1, 
@@ -57,14 +79,29 @@ class TracelogVerifier(extensions.Operation):
         if assistant.run() != RESPONSE_APPLY:
             return
 
-    def run(self, app, tracelog):
+    def run(self, app):
+        
+        dialog = gtk.FileChooserDialog("Choose a tracelog for verification",
+                                       app.window,
+                                       gtk.FILE_CHOOSER_ACTION_OPEN,
+                                       (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
+                                       gtk.STOCK_OPEN, gtk.RESPONSE_OK))
+        dialog.set_default_response(gtk.RESPONSE_OK)
 
-        t = VTraceLog(tracelog)
+        dialog.add_filter(datatypes.get_load_file_filter(datatypes.get_type_by_suffix("kth")))
+
+        filename = None
+        try:
+            response = dialog.run()
+            if response == gtk.RESPONSE_OK:
+                filename = dialog.get_filename()                
+        finally:
+            dialog.destroy()
         
-        self.display_result(app, t.get_results())
-        
-            
-        
+        if filename is not None:
+            t = VTraceLog(filename)
+            self.display_result(app, t.get_results())
+                
 
 extensions.add_operation(TracelogVerifier)
 
