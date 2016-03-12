@@ -19,6 +19,7 @@
 
 import gtk
 import gobject
+import datatypes
 
 class SettingWidget(gtk.Table):
     """General widget for visualize and change setting parameters. It provides
@@ -170,6 +171,28 @@ class SettingWidget(gtk.Table):
         def get():
             return (label, None, strToValue(entry.get_text()))
         self.add_widget(key, label, entry, get, validator)
+
+    def add_filebutton(self, key, label, file_type):
+        """ Adds a button for choosing an input file. If no file was chosen
+            value of the widget would be None.
+        
+            Arguments:
+            key -- the unique key
+            label -- label than will be presented in a widget
+            file_type -- string with a supported file type by Kaira
+            (e.g. "csv", "kth", "kst", etc.) 
+        """
+        button = gtk.FileChooserButton("Choose a file")
+        button.set_action(gtk.FILE_CHOOSER_ACTION_OPEN)
+        filetype = datatypes.get_type_by_suffix(file_type)
+        if filetype is None:
+            raise Exception("File type {0} is not supported!".format(file_type))
+        button.add_filter(datatypes.get_load_file_filter(filetype))
+        def get():
+            return (label, None, button.get_filename())
+            
+        self.add_widget(key, label, button, get)
+        
 
     def add_combobox(self, key, label, items, default=0):
 

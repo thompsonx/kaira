@@ -24,21 +24,21 @@ class VTraceLog(TraceLog):
     
     """ Tracelog verifier - Scans traces and finds clock condition violations and maximum and average delay """
     
-    def __init__(self, tracelog):
+    def __init__(self, filename):
         """ VTraceLog initialization
         
             Arguments:
-            tracelog -- a TraceLog object to be verified
+            filename -- a path to a tracelog file (*.kth)
         """
         
-        TraceLog.__init__(self, None, False, False)
+        TraceLog.__init__(self, filename, False, False)
         
-        self.filename = tracelog
-        self._read_header()
-
-        self.traces = [None] * self.process_count
-        for process_id in xrange(self.process_count):
-            self._read_trace(process_id)
+#         self.filename = tracelog
+#         self._read_header()
+# 
+#         self.traces = [None] * self.process_count
+#         for process_id in xrange(self.process_count):
+#             self._read_trace(process_id)
         
         self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]
         

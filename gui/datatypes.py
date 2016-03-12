@@ -140,6 +140,11 @@ def get_load_file_filters():
     return result
 
 def get_load_file_filter(type):
+    """ Setups gtk.FileFilter for specified Type 
+    
+        Arguments:
+        type -- an object of Type to be a subject of filter
+    """
     patterns = [ "*." + s for s in type.loaders.keys() ]
     filter = gtk.FileFilter()
     filter.set_name("{0} ({1})".format(type.short_name, ", ".join(patterns)))

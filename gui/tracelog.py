@@ -1,6 +1,7 @@
 #
-#    Copyright (C) 2012-2013 Stanislav Bohm,
-#                       Martin Surkovsky
+#    Copyright (C) 2012-2016 Stanislav Bohm,
+#                            Martin Surkovsky,
+#                            Tomas Panoc
 #
 #    This file is part of Kaira.
 #
@@ -32,9 +33,7 @@ zero_char = chr(0)
 
 class TraceLog:
 
-    def __init__(self, filename, export_data=False, init=True):
-        if not init:
-            return
+    def __init__(self, filename, export_data=False, default=True):
         self.filename = filename
         self.export_data = export_data
         self._read_header()
@@ -43,9 +42,10 @@ class TraceLog:
         for process_id in xrange(self.process_count):
             self._read_trace(process_id)
 
-        self.first_runinstance = RunInstance(self.project, self.process_count)
+        if default:
+            self.first_runinstance = RunInstance(self.project, self.process_count)
 
-        self._preprocess()
+            self._preprocess()
 
     def execute_visible_events(self, ri, from_event=0, to_event=None):
         if to_event is None:
