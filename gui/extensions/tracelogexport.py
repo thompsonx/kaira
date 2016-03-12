@@ -32,6 +32,9 @@ class TracelogExport(extensions.Operation):
 
     parameters = [ extensions.Parameter("Tracelog", datatypes.t_tracelog) ]
 
+    def _output_name(self):
+        return "Tracelog Table"
+
     def run(self, app, tracelog):
 
         settings = exportri.run_assistant(app, tracelog);
@@ -40,7 +43,7 @@ class TracelogExport(extensions.Operation):
 
         ri = ExportRunInstance(tracelog, *settings)
         tracelog.execute_all_events(ri)
-        return extensions.Source("Tracelog Table",
+        return extensions.Source(self._output_name(),
                                  datatypes.t_table,
                                  ri.get_table())
 
