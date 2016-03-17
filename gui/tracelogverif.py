@@ -1,5 +1,5 @@
 #
-#    Copyright (C) 2012-2016 Tomas Panoc
+#    Copyright (C) 2015-2016 Tomas Panoc
 #
 #    This file is part of Kaira.
 #
@@ -31,7 +31,7 @@ class VTraceLog(TraceLog):
             filename -- a path to a tracelog file (*.kth)
         """
         
-        TraceLog.__init__(self, filename, False, False)
+        TraceLog.__init__(self, filename, False, True, False)
         
 #         self.filename = tracelog
 #         self._read_header()

@@ -53,11 +53,12 @@ class SyncedTraceLog (TraceLog):
         """
         
         if "fromtracelog" in kwargs:
-            self._syncing = True
-            TraceLog.__init__(self, kwargs["fromtracelog"][0], False, False)         
+            TraceLog.__init__(self, kwargs["fromtracelog"][0], False, True, False)
+            self._syncing = True         
             self._from_tracelog(kwargs["fromtracelog"][1])
 
         elif "fromfile" in kwargs:
+            TraceLog.__init__(self, kwargs["fromfile"][0], False, False)
             self._syncing = False
             self._from_file(kwargs["fromfile"])
             
@@ -91,28 +92,8 @@ class SyncedTraceLog (TraceLog):
             
     
     def _from_file(self, filename):
-        self.pointer_size = 0
-        self.traces = []
-        self.project = None
-        
-        with open(filename, "rb") as f:
-            self.pointer_size = int(f.readline())
-            self.process_count = int(f.readline())
-            
-            i = 0
-            processes_length = []
-            while i < self.process_count:
-                processes_length.append(int(f.readline()))
-                i += 1
-            
-            i = 0
-            for p in processes_length:
-                trace = Trace(f.read(p), i, self.pointer_size)
-                self.traces.append(trace)
-                i += 1
-            
-            x = xml.fromstring(f.read())
-            self.project = loader.load_project_from_xml(x, "")
+        self.process_count, self.pointer_size, self.traces, self.project = \
+            SyncedTraceLogLoader(filename).load()
         
         self.filename = filename
         self.export_data = True        
@@ -220,6 +201,40 @@ class SyncedTraceLog (TraceLog):
             f.write(data)
 
 
+class SyncedTraceLogLoader(object):
+    
+    def __init__(self, filename):
+        self._filename = filename
+        self._loaded = False
+        
+    def load(self):
+        if not self._loaded:
+            self.pointer_size = 0
+            self.traces = []
+            self.project = None
+            
+            with open(self._filename, "rb") as f:
+                self.pointer_size = int(f.readline())
+                self.process_count = int(f.readline())
+                
+                i = 0
+                processes_length = []
+                while i < self.process_count:
+                    processes_length.append(int(f.readline()))
+                    i += 1
+                
+                i = 0
+                for p in processes_length:
+                    trace = Trace(f.read(p), i, self.pointer_size)
+                    self.traces.append(trace)
+                    i += 1
+                
+                x = xml.fromstring(f.read())
+                self.project = loader.load_project_from_xml(x, "")
+            self._loaded = True
+        return (self.process_count, self.pointer_size, self.traces, 
+                self.project)
+        
 class SyncedTrace(Trace):
     
     def __init__(self, data, process_id, pointer_size, minimal_event_diff, \
@@ -253,7 +268,6 @@ class SyncedTrace(Trace):
         self._messenger = messenger
         self._data_list = []
         self._header_info = self.data[:self.pointer]
-        self.output = []
         self._last_event_time = 0
         self._send_events = OrderedDict()
         self._last_received_sent_time = 0
@@ -264,7 +278,7 @@ class SyncedTrace(Trace):
         self._receive_send_table = {}
         
     def _clock_check(self, time, start_pointer, end_pointer=False, \
-                     is_receive=False, send_time=0):
+                     is_receive=False, sent_time=0):
         """ Checks, computes and repairs an event timestamp
             
             Arguments:
@@ -273,14 +287,14 @@ class SyncedTrace(Trace):
             end_pointer -- a pointer value after the event unpacking/reading, 
                             if False self.pointer is used
             is_receive -- marks a receive event
-            send_time -- a timestamp of corresponding send event
+            sent_time -- a timestamp of corresponding send event
          """
         newtime = 0
         
         if not is_receive:
             newtime = self._clock(time + self.time_offset)
         else:
-            newtime = self._clock_receive(time + self.time_offset, send_time)
+            newtime = self._clock_receive(time + self.time_offset, sent_time)
         
         # Save time to the data list
         self._repair_time(newtime, start_pointer, end_pointer)
@@ -304,20 +318,20 @@ class SyncedTrace(Trace):
         
         return newtime
     
-    def _clock_receive(self, time, send_time):
+    def _clock_receive(self, time, sent_time):
         """ Computes a new time for a process's receive event 
             
             Arguments:
             time -- the time to be fixed
-            send_time -- time of the corresponding send event
+            sent_time -- time of the corresponding send event
         """
         newtime = 0
         if self._last_event_time != 0:
-            newtime = max([send_time + self._minimum_msg_delay, time, \
+            newtime = max([sent_time + self._minimum_msg_delay, time, \
                            self._last_event_time + \
                            self._minimal_event_diff])
         else:
-            newtime = max([send_time + self._minimum_msg_delay, time])
+            newtime = max([sent_time + self._minimum_msg_delay, time])
         
         if self._forward_amort:
             self._forward_amortization(time, newtime)

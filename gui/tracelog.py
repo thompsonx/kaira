@@ -33,7 +33,9 @@ zero_char = chr(0)
 
 class TraceLog:
 
-    def __init__(self, filename, export_data=False, default=True):
+    def __init__(self, filename, export_data=False, init=True, default=True):
+        if not init:
+            return
         self.filename = filename
         self.export_data = export_data
         self._read_header()
