@@ -90,8 +90,8 @@ class VTraceLog(TraceLog):
                     else:
                         current_p = processes[0]
         
-        self.violations = max([t.get_violations_number() for t in self.traces])
-        self.receives = max([t.get_receives_number() for t in self.traces])
+        self.violations = sum([t.get_violations_number() for t in self.traces])
+        self.receives = sum([t.get_receives_number() for t in self.traces])
         self.max_delay = 0
         self.avrg_delay = 0
         if self.violations > 0:
@@ -182,6 +182,6 @@ class VTrace(Trace):
             sent_time = self._messages[origin_id][self.process_id].get()
             if time + self.time_offset < sent_time:
                 self._ccviolations += 1
-                self._delays.append(sent_time - time + self.time_offset)
+                self._delays.append(sent_time - time - self.time_offset)
         return time
     
