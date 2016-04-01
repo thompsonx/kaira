@@ -19,7 +19,6 @@
 
 import xml.etree.ElementTree as xml
 import loader
-import copy 
 from runinstance import RunInstance
 from tracelog import TraceLog, Trace
 from Queue import Queue
@@ -113,7 +112,7 @@ class SyncedTraceLog (TraceLog):
         starttime = min([ trace.get_init_time() for trace in self.traces ])
         for trace in self.traces:
             trace.time_offset = trace.get_init_time() - starttime
-#             trace.set_init_time(trace.time_offset)
+            trace.set_init_time(trace.time_offset)
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
@@ -134,12 +133,8 @@ class SyncedTraceLog (TraceLog):
                         sender = trace.get_msg_sender()
                         if self.messages[sender][current_p].empty() is False:
                             if self.backward_amort:
-                                #Backward amortization - check refilled receive times
-                                if not trace.are_receive_times_refilled():
-                                    current_p = trace.get_missing_receive_time_process_id()
-                                    break
-                                
                                 trace.process_event()
+                                print "Progress {0}".format(float(trace.pointer) / float(len(trace.data)) * 100)
                                 #Backward amortization - add receive time and maximum offset
                                 self.traces[sender].refill_received_time(trace.get_last_received_sent_time(),\
                                                                          trace.get_last_receive_event_time(),\
@@ -157,6 +152,9 @@ class SyncedTraceLog (TraceLog):
                         current_p += 1
                     else:
                         current_p = processes[0]
+        
+        for trace in self.traces:
+            trace.finalize()
         
                 
     def refill_received_time(self, target, send_time, receive_time, receiver, \
@@ -273,9 +271,8 @@ class SyncedTrace(Trace):
         self._last_received_sent_time = 0
         self._last_refilled_send_time = None
         self._last_receive_event_time = 0
-        self._missing_receive_time_process_id = None
-        self._is_backward_amortization = False
         self._receive_send_table = {}
+        self._BA_tasks = []
         
     def _clock_check(self, time, start_pointer, end_pointer=False, \
                      is_receive=False, sent_time=0):
@@ -335,8 +332,6 @@ class SyncedTrace(Trace):
         
         if self._forward_amort:
             self._forward_amortization(time, newtime)
-        if self._is_backward_amortization:
-            self._backward_amortization(time, newtime)
         
         self._last_event_time = newtime
         self._last_receive_event_time = newtime
@@ -352,48 +347,85 @@ class SyncedTrace(Trace):
             origin_time -- original timestamp of an receive event
             new_time -- corrected/synchronized timestamp of the event
         """
-        if new_time > origin_time and new_time > \
-        (self._last_event_time + self._minimal_event_diff):
-            self.time_offset += (new_time - max([origin_time, \
-            self._last_event_time + self._minimal_event_diff]))
+        if new_time > origin_time:
+            self.time_offset += new_time - origin_time
+    
+    def finalize(self):
+        """ Finalize the synchronization of a trace. This should be called after
+            the timestamp correction of all events within the trace.
+        """
+        if not self._backward_amort:
+            return
+        for task in self._BA_tasks:
+            self._backward_amortization(task.original, task.time)
+    
+    def _do_BA(self, newtime, original):
+        """ Creates a new request for BA (task) and performs all previous tasks 
+            which are ready.
+        """ 
+        if not self._backward_amort:
+            return
+        if self._last_event_time == 0:
+            return
+        if newtime <= original:
+            return
+        
+        ready = self.are_receive_times_refilled()
+        self._BA_tasks.append( BATask( newtime, original, ready ) ) 
+        
+        for task in self._BA_tasks[ : -1]:
+            rdy = self.are_receive_times_refilled(task.time)
+            task.ready = rdy
+            if rdy:
+                self._backward_amortization(task.original, task.time)
+        
+        if ready:
+            self._backward_amortization(original, newtime)
+
+        self._BA_tasks = [task for task in self._BA_tasks if not task.ready]
     
     def _backward_amortization(self, origin_time, new_time):
-        """ Applies the backward amortization 
+        """ Applies the backward amortization. It expects that received 
+            times for all preceding send events have been filled.
         
             Arguments:
             origin_time -- original timestamp of an receive event
             new_time -- corrected/synchronized timestamp of the event
         """
         offset = new_time - origin_time
-        linear_send_events = copy.deepcopy(self._send_events)
-
-        # Reduces collective messages into one
-        for t in linear_send_events.keys():
-            send_events = self._send_events[t]
-            if len(send_events) > 1:
-                index = send_events.index(min([e.offset for e in send_events]))
-                linear_send_events[t] = send_events[index]
-            else:
-                linear_send_events[t] = linear_send_events[t][0]
+        send_event_keys = [ key for key in self._send_events.keys() if key > new_time ]
+        linear_send_events = OrderedDict()
         
-        # Eliminates send events which break linear growth of the offsets
-        delete_events = Queue()
+        # Pick send events which occurred before the receive event    
+        if send_event_keys:
+            tmp_point = self._send_events.keys().index(send_event_keys[0])
+            send_set = self._send_events.keys()[ : tmp_point ]
+        else:
+            send_set = self._send_events.keys()
+        
+        # Linear correction - a set of breakpoints arrangement
         previous = SendEvent()
-        for time, event in linear_send_events.iteritems():
-            event.time = time
-            if previous.offset >= event.offset or previous.offset >= offset:
+        delete_events = Queue()
+        for event in send_set:
+            se = self._send_events[event]
+            if len(se) > 1:
+                index = se.index( min( se, key=lambda x: x.offset ) )
+                bp = se[index]
+            else:
+                bp = se[0]
+            bp.time = event
+            linear_send_events[event] = bp
+            if bp.offset <= previous.offset or previous.offset >= offset:
                 delete_events.put(previous.time)
-            previous = event
-        # Last event is not checked in the loop above, this checks it
+            previous = bp
         if previous.offset >= offset:
-            delete_events.put(previous.time)
+            delete_events.put(previous.time)        
         length = delete_events.qsize()
         while length > 0:
             linear_send_events.pop(delete_events.get(), None)
-            length -= 1
+            length -= 1        
         
         # Repair times
-        last_event = self._data_list.pop()
         send_event = [0]
         local_offset = offset
         # Is there any event that cannot be shifted by full amount of the offset
@@ -402,6 +434,8 @@ class SyncedTrace(Trace):
             local_offset = send_event[1].offset
         new_send_events = OrderedDict()
         for index, event in enumerate(self._data_list):
+            if event[1] == new_time:
+                break
             if event[0] == "M":
                 tmp_time = event[1]
                 time = tmp_time + local_offset
@@ -427,65 +461,42 @@ class SyncedTrace(Trace):
                                                                     event[1], \
                                                                     self.process_id, \
                                                                     False)
-        self._send_events = new_send_events
-        self._data_list.append(last_event)
         
-    def _predict_backward_amortization(self):
-        """ Returns True if the backward amortization should be done """
-        if not self._backward_amort:
-            return False
-        if not self.get_next_event_name() == "Recv ":
-            return False
-        if self._last_event_time == 0:
-            return False
+        # Add send events behind the receive event back
+        for key in send_event_keys:
+            new_send_events[key] = self._send_events[key]
+            self._last_refilled_send_time = key
         
-        send_time = 0
-        sender = self.get_msg_sender()
-        try:
-            send_time = self._messages[sender][self.process_id].get_and_keep()[1]
-        except:
-            print "Failed to load a send time from the shared variable messages.\
-                 Sender: {0}, Receiver: {1}, Received time: {2}"\
-                 .format(sender, self.process_id, self.get_next_event_time())
-            return False
-        
-        origin_time = self.get_next_event_time()
-        new_time = max([send_time + self._minimum_msg_delay, origin_time, \
-                           self._last_event_time + \
-                           self._minimal_event_diff])
-        if new_time > origin_time and new_time > \
-                (self._last_event_time + self._minimal_event_diff):
-            return True
-        else:
-            return False
+        self._send_events = new_send_events        
     
-    def are_receive_times_refilled(self):
+    def are_receive_times_refilled(self, received_time=None):
         """ Returns True if all current send events (SendEvent send_events) have 
-        refilled the receive time field. THIS MUST BE CALLED BEFORE EACH 
-        RECEIVE EVENT'S PROCESSING IF THE BACKWARD AMORTIZATION IS TURNED ON!"""
-        if not self._predict_backward_amortization():
-            self._is_backward_amortization = False
-            return True
+            refilled the receive time field.
+            
+            Arguments:
+            received_time -- time of a receive event which specifies an upper 
+                            border for a set of send events to be checked
+        """
         times = self._send_events.keys()
         if self._last_refilled_send_time is not None:
             start = times.index(self._last_refilled_send_time)
             times = times[start:]
+            if received_time is not None:
+                times = [t for t in times if t < received_time]
         for t in times:
             for e in self._send_events[t]:
                 if e.receive == 0:
-                    self._missing_receive_time_process_id = e.receiver
-                    self._is_backward_amortization = False
                     return False
-        self._is_backward_amortization = True
         return True
     
     def refill_received_time(self, sent_time, received_time, receiver, new_record=True):
-        """ Backward amortization - adds receive time for a specific sent time 
-            and compute maximum offset
+        """ Matches receive time to a specific sent time and computes 
+            maximum offset
             
             Arguments:
             sent_time -- time of a corresponding send event
-            receive_time -- time of a receipt of the msg to be filled
+            received_time -- time of a receipt of the msg to be filled
+            receiver -- ID of a process where the receive event happened
             new_record -- if True you are adding missing received time otherwise
                             you are updating an existing received time
         """
@@ -510,22 +521,16 @@ class SyncedTrace(Trace):
         stream.close()
         return export
     
-    
-    def get_missing_receive_time_process_id(self):
-        """ Returns id of a process whose time of a receive event was 
-        missing during the are_receive_times_refilled() method"""
-        return self._missing_receive_time_process_id
-    
-#     def set_init_time(self, increment):
-#         """ Increase initial time of a process by the increment value
-#         
-#             Arguments:
-#             increment -- an integer value which is added to the initial time        
-#         """
-#         origin = self.info["inittime"]
-#         newtime = str(int(origin) + increment)
-#         self.info["inittime"] = newtime
-#         self._header_info = self._header_info.replace(origin, newtime)
+    def set_init_time(self, increment):
+        """ Increase initial time of a process by the increment value
+         
+            Arguments:
+            increment -- an integer value which is added to the initial time        
+        """
+        origin = self.info["inittime"]
+        newtime = str(int(origin) + increment)
+        self.info["inittime"] = newtime
+        self._header_info = self._header_info.replace(origin, newtime)
         
     
     def get_msg_sender(self):
@@ -582,7 +587,9 @@ class SyncedTrace(Trace):
             send_event = self._messages[origin_id][self.process_id].get()
             sent_time = send_event[1]
             self._receive_send_table[ len(self._data_list) - 1 ] = RSTableElement(send_event, origin_id)
+            tmp_original_time = time + self.time_offset 
             ctime = self._clock_check(time, pointer, False, True, sent_time)
+            self._do_BA(ctime, tmp_original_time)
             self._last_received_sent_time = sent_time
             return ctime
 
@@ -675,4 +682,23 @@ class RSTableElement(object):
     def get_sent_time(self):
         """ Returns time of sent event """
         return self.send_event[1]
+
+class BATask(object):
+    """ Task for Backward Amortization 
+        Represents a receive event which causes BA
+    """
+    
+    def __init__(self, receive_time, original_time, ready):
+        """ Initialization 
+            
+            Arguments:
+            receive_time -- corrected/synchronized timestamp of receive event
+            original_time -- original timestamp of receive event
+            ready -- True/False - marks whether all preceding send events were 
+                    matched to their corresponding receive events 
+        """
+        
+        self.time = receive_time
+        self.original = original_time
+        self.ready = ready
     
