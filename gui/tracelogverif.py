@@ -22,7 +22,8 @@ from Queue import Queue
 
 class VTraceLog(TraceLog):
     
-    """ Tracelog verifier - Scans traces and finds clock condition violations and maximum and average delay """
+    """ Tracelog verifier - Scans traces and finds clock condition violations 
+        and maximum and average message delay """
     
     def __init__(self, filename, weak_sync):
         """ VTraceLog initialization
@@ -53,7 +54,8 @@ class VTraceLog(TraceLog):
         self._verify()
         
     def _verify(self):
-        """ Scans traces and finds clock condition violations and maximum and average delay """
+        """ Scans traces and finds clock condition violations and maximum and 
+            average message delay """
         
         if self._weak_sync:
             maxspawntrace = max( self.traces, key=lambda x: x.get_next_event_time() )
@@ -146,8 +148,8 @@ class VTrace(Trace):
         self._delays = []
 
     def get_msg_sender(self):
-        """ Returns None or the id of a process, who is the sender of the received
-            message, if the next event is receive event
+        """ Returns None, or the id of a process, who is the sender of the 
+            received message if the next event is receive event
         """
         if self.get_next_event_name() == "Recv ":
             tmp_pointer = self.pointer
@@ -181,7 +183,7 @@ class VTrace(Trace):
         self._messages[self.process_id][target_id].put(time + self.time_offset)
         
     def _extra_time(self, time, pointer, receive=False, origin_id=None):
-        """ Resolves the violation and counts delay """
+        """ Resolves the violation and computes message delay """
         if receive:
             if origin_id is None:
                 raise Exception("Origin_id for a receive event not entered!")

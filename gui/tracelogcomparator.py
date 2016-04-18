@@ -26,7 +26,20 @@ from table import Table
 
 class TracelogComparator(object):
     
+    """ Performs an analysis of results of synchronized tracelog by comparing
+        it with the original one. """
+    
     def __init__(self, tracelog_filepath, syncedtracelog_filepath, weak_sync):
+        """ Initialization.
+        
+            Arguments:
+            tracelog_filepath -- path to a *.kth
+            syncedtracelog_filepath -- path to a *.kst
+            weak_sync -- if True initial weak synchronization is applied
+                        to the original tracelog to make it comparable to
+                        the synced one where the weak sync was already
+                        performed
+        """
                 
         t_queue = mp.Queue()
         st_queue = mp.Queue()
@@ -49,9 +62,16 @@ class TracelogComparator(object):
         self._process_statistics(t_stats, st_stats)
     
     def get_results(self):
+        """ Returns Table of results of the comparison. """
         return self.result_table
      
     def _process_statistics(self, t_stats, st_stats):
+        """ Compares tracelogs. 
+        
+            Arguments:
+            t_stats -- Statistics of the original tracelog
+            st_stats -- Statistics of the synced tracelog
+        """
         rows = []
         rows.append(("Execution time", t_stats.get_execution_time(), 
                      st_stats.get_execution_time()))
@@ -93,6 +113,15 @@ class TracelogComparator(object):
         
     
     def _find_breakpoints(self, queue, t_ints, st_ints):
+        """ Analysis of breakpoints. (Process)
+        
+            Arguments:
+            queue -- Queue for interprocess communication
+            t_ints -- original tracelog's 
+                    Statistics.get_process_send_events_intervals
+            st_ints -- synced tracelog's
+                    Statistics.get_process_send_events_intervals
+        """
         max_interval = 0
         avg_int = 0
         ints = 0
@@ -111,13 +140,22 @@ class TracelogComparator(object):
         queue.put((max_interval, avg_int, ints))
     
     def _process_t(self, tracelog_type, filename, queue, weak_sync=False):
+        """ A process that performs data gathering in a tracelog. 
+            
+            Arguments:
+            tracelog_type -- original/synced, type of tracelog
+            filename -- path to the tracelog
+            queue -- Queue for interprocess communication
+            weak_sync -- if True the initial weak synchronization is applied,
+                    WORKS ONLY FOR THE original TRACELOG
+        """
         if tracelog_type == "original":
             tracelog = TComparable(filename)
         elif tracelog_type == "synced":
             tracelog = STComparable(filename)
         tracelog.init()
         if tracelog_type == "original":
-            tracelog.process(True, weak_sync)
+            tracelog.process(weak_sync)
         elif tracelog_type == "synced":
             tracelog.process(False)
         
@@ -125,20 +163,35 @@ class TracelogComparator(object):
 
 class ComparableTraceLog(object):
     
+    """ Abstract class. Gathers data from tracelog. """
+    
     def __init__(self, filename):
+        """ Initialization.
+         
+            Arguments:
+            filename -- path to a tracelog file
+        """
         self._initialized = False
         self._filename = filename
+        self._type = "original"
         
     def init(self):
+        """ Preparation for the gathering. """
         self._load_file(self._filename)
         self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]
         self._init_traces()
         self._initialized = True
         
     def _load_file(self, filename):
+        """ Reserved for tracelog loading.
+            
+            Arguments:
+            filename -- path to a tracelog file
+        """
         pass
     
     def _init_traces(self):
+        """ Initializes individual traces. """
         vtraces = []
         self._statistics = Statistics()
         for t in self.traces:
@@ -148,14 +201,21 @@ class ComparableTraceLog(object):
         self.traces = vtraces
     
     def _init_trace(self, data, process_id, pointer_size, messages, statistics):
+        """ Returns trace object. """
         return ComparableTrace(data, process_id, pointer_size, messages,
                                statistics, "original")
     
-    def process(self, init_times=True, weak_sync=False):
+    def process(self, weak_sync=False):
+        """ Performs data gathering.
+        
+            Arguments:
+            weak_sync -- if True the initial weak synchronization is applied,
+                    WORKS ONLY FOR THE original TRACELOG
+        """
         if not self._initialized:
             return
 
-        if init_times:
+        if self._type == "original":
             if weak_sync:
                 maxspawntrace = max( self.traces, key=lambda x: x.get_next_event_time() )
                 for trace in self.traces:
@@ -204,7 +264,7 @@ class STComparable(ComparableTraceLog):
     
     def __init__(self, filename):
         ComparableTraceLog.__init__(self, filename)
-        self.process(False)
+        self._type = "synced"
         
     def _load_file(self, filename):
         self.process_count, self.pointer_size, self.traces, project = \
@@ -218,7 +278,6 @@ class TComparable(ComparableTraceLog):
     
     def __init__(self, filename):
         ComparableTraceLog.__init__(self, filename)
-        self.process()
         
     def _load_file(self, filename):
         tracelog = TraceLog(filename, False, True, False)
