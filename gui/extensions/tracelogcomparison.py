@@ -45,6 +45,9 @@ class TracelogComparison(extensions.Operation):
             w.add_filebutton("syncedtracelog", 
                              "Synchronized tracelog (*.kst): ", 
                              "kst")
+            w.add_checkbutton("weaksync",
+                              "Apply initial weak synchronization",
+                              False)
             return w
         
         assistant.append_setting_widget(TracelogComparison.name, page)
@@ -52,7 +55,9 @@ class TracelogComparison(extensions.Operation):
         if assistant.run() != RESPONSE_APPLY:
             return
         
-        return (assistant.get_setting("tracelog"), assistant.get_setting("syncedtracelog"))
+        return (assistant.get_setting("tracelog"), 
+                assistant.get_setting("syncedtracelog"),
+                assistant.get_setting("weaksync"))
                 
 
     def run(self, app):
@@ -60,7 +65,7 @@ class TracelogComparison(extensions.Operation):
         if settings is None:
             return
         
-        comparator = TracelogComparator(settings[0], settings[1])
+        comparator = TracelogComparator(settings[0], settings[1], settings[2])
         
         source = extensions.Source("Tracelog comparison results",
                                  datatypes.t_table,

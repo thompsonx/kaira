@@ -53,6 +53,9 @@ class TracelogSync(extensions.Operation):
             w.add_checkbutton("backward_amort", 
                               "Apply the backward amortization", 
                               True)
+            w.add_checkbutton("weaksync",
+                              "Apply initial weak synchronization",
+                              False)
             return w
         
         assistant.append_setting_widget("Synchronization settings", page)
@@ -64,6 +67,7 @@ class TracelogSync(extensions.Operation):
                 assistant.get_setting("min_msg_delay"), 
                 assistant.get_setting("forward_amort"),
                 assistant.get_setting("backward_amort"),
+                assistant.get_setting("weaksync"),
                 assistant.get_setting("file"))
 
     def run(self, app):
@@ -71,11 +75,11 @@ class TracelogSync(extensions.Operation):
         settings = self.display_settings(app)
         if settings is None:
             return
-        if settings[4] is None:
+        if settings[5] is None:
             print "No file chosen!"
             return
         
-        syncedtracelog = SyncedTraceLog(fromtracelog=(settings[4], settings))
+        syncedtracelog = SyncedTraceLog(fromtracelog=(settings[5], settings))
         
         source = extensions.Source("Synchronized tracelog",
                                  datatypes.t_syncedtracelog,

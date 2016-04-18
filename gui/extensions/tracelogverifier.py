@@ -42,6 +42,9 @@ class TracelogVerifier(extensions.Operation):
             w.add_filebutton("file", 
                       "Tracelog (*.kth): ",
                        "kth")
+            w.add_checkbutton("weaksync",
+                              "Apply initial weak synchronization",
+                              False)
             return w
         
         assistant.append_setting_widget(TracelogVerifier.name, page)
@@ -49,7 +52,8 @@ class TracelogVerifier(extensions.Operation):
         if assistant.run() != RESPONSE_APPLY:
             return
         
-        return assistant.get_setting("file")
+        return (assistant.get_setting("file"), 
+                assistant.get_setting("weaksync"))
     
     def create_table(self, app, results):
         rows = []
@@ -75,7 +79,7 @@ class TracelogVerifier(extensions.Operation):
         settings = self.display_settings(app)
         if settings is None:
             return
-        t = VTraceLog(settings)
+        t = VTraceLog(settings[0], settings[1])
         return self.create_table(app, t.get_results())
                 
 

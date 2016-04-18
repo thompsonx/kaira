@@ -24,11 +24,12 @@ class VTraceLog(TraceLog):
     
     """ Tracelog verifier - Scans traces and finds clock condition violations and maximum and average delay """
     
-    def __init__(self, filename):
+    def __init__(self, filename, weak_sync):
         """ VTraceLog initialization
         
             Arguments:
             filename -- a path to a tracelog file (*.kth)
+            weak_sync -- if True the initial weak synchronization is applied
         """
         
         TraceLog.__init__(self, filename, False, True, False)
@@ -41,6 +42,7 @@ class VTraceLog(TraceLog):
 #             self._read_trace(process_id)
         
         self.messages = [[Queue() for x in range(self.process_count)] for x in range(self.process_count)]
+        self._weak_sync = weak_sync
         
         self.vtraces = []
         for t in self.traces:
@@ -53,11 +55,16 @@ class VTraceLog(TraceLog):
     def _verify(self):
         """ Scans traces and finds clock condition violations and maximum and average delay """
         
-        # Make an init time of the process with the lowest init time reference
-        # time for all events from all processes
-        starttime = min([ trace.get_init_time() for trace in self.traces ])
-        for trace in self.traces:
-            trace.time_offset = trace.get_init_time() - starttime
+        if self._weak_sync:
+            maxspawntrace = max( self.traces, key=lambda x: x.get_next_event_time() )
+            for trace in self.traces:
+                trace.time_offset = maxspawntrace.get_next_event_time() - trace.get_next_event_time()
+        else:
+            # Make an init time of the process with the lowest init time reference
+            # time for all events from all processes
+            starttime = min([ trace.get_init_time() for trace in self.traces ])
+            for trace in self.traces:
+                trace.time_offset = trace.get_init_time() - starttime
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]

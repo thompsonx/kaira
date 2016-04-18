@@ -26,16 +26,20 @@ from collections import OrderedDict
 from cStringIO import StringIO
            
 class SyncedTraceLog (TraceLog):
+    """ SyncedTraceLog -- synchronizes timestamps within a Kaira tracelog 
+            (*.kth), removes the clock condition violations
+    """
     
     def __init__(self, **kwargs):
         """ Creates new SyncedTraceLog object, different method is used 
-            according to passed argument.
+            according to the passed keyword.
             
             Key: 'fromtracelog' -> Value: 
                 Tuple( 
                         a path to a tracelog file (*.kth), 
                         settings tuple( min_event_diff, min_msg_delay, 
-                                        forward_amort, backward_amort ) 
+                                        forward_amort, backward_amort, 
+                                        weak_sync ) 
                     )
                 min_event_diff -- Minimal difference between 2 events 
                                     in a process (nanoseconds)
@@ -45,6 +49,7 @@ class SyncedTraceLog (TraceLog):
                                     feature
                 backward_amort -- True/False, turns on/off backward 
                                     amortization feature
+                weak_sync -- True/False, turns on/off initial weak synchronization
                 Creates a new SyncedTraceLog object from an existing TraceLog 
                 object and does the synchronization
             Key: 'fromfile' -> Value: A path to a *.kst
@@ -73,6 +78,7 @@ class SyncedTraceLog (TraceLog):
             self.minimum_msg_delay = settings[1]
             self.forward_amort = settings[2]
             self.backward_amort = settings[3]
+            self.weak_sync = settings[4]
             
             self.straces = []
             messenger = Messenger(self)
@@ -107,19 +113,26 @@ class SyncedTraceLog (TraceLog):
             procedure 
         """
         
+        # Apply initial weak synchronization
+        if self.weak_sync:
+            maxspawntrace = max( self.traces, key=lambda x: x.get_next_event_time() )
+            for trace in self.traces:
+                trace.time_offset = maxspawntrace.get_next_event_time() - trace.get_next_event_time()
+                trace.set_init_time(maxspawntrace.get_init_time())
         # Make an init time of the process with the lowest init time reference
         # time for all events from all processes
-        starttime = min([ trace.get_init_time() for trace in self.traces ])
-        for trace in self.traces:
-            trace.time_offset = trace.get_init_time() - starttime
-            trace.set_init_time(trace.time_offset)
+        else:
+            starttime = min([ trace.get_init_time() for trace in self.traces ])
+            for trace in self.traces:
+                trace.time_offset = trace.get_init_time() - starttime
+                trace.set_init_time(trace.time_offset)
         
         # List of unprocessed processes
         processes = [x for x in range(self.process_count)]
         # A process which will be processed
         current_p = processes[0]
         
-        # Control algorithm goes through every event of a process,
+        # Control mechanism goes through every event of a process,
         # it jumps to another process if a send event of reached receive event
         # is found to be unprocessed or if the end of process is reached
         while processes:
@@ -132,15 +145,12 @@ class SyncedTraceLog (TraceLog):
                     if trace.get_next_event_name() == "Recv ":
                         sender = trace.get_msg_sender()
                         if self.messages[sender][current_p].empty() is False:
+                            trace.process_event()
                             if self.backward_amort:
-                                trace.process_event()
-                                print "Progress {0}".format(float(trace.pointer) / float(len(trace.data)) * 100)
                                 #Backward amortization - add receive time and maximum offset
                                 self.traces[sender].refill_received_time(trace.get_last_received_sent_time(),\
                                                                          trace.get_last_receive_event_time(),\
                                                                          working_p) 
-                            else:
-                                trace.process_event()                                        
                         else:
                             current_p = sender
                     else:
@@ -159,7 +169,7 @@ class SyncedTraceLog (TraceLog):
                 
     def refill_received_time(self, target, send_time, receive_time, receiver, \
                             new_record=True):
-        """ Pairs a receive time to the corresponding sent time and computes 
+        """ Pairs a received time with the corresponding sent time and computes 
             maximum offset. Works only if the backward amortization is turned
             on.
             
@@ -167,15 +177,15 @@ class SyncedTraceLog (TraceLog):
             target -- ID of a process whose data should be refilled
             send_time -- time of a corresponding send event
             receive_time -- time of a receipt of the msg to be filled
-            new_record -- if True you are adding missing receive time otherwise \
-                            you are updating an existing receive time
+            new_record -- if True you are adding missing received time otherwise \
+                            you are updating an existing received time
         """
         if self._syncing:
             self.traces[target].refill_received_time(send_time, receive_time, \
                                                     receiver, new_record)
     
     def export_to_file(self, filename):
-        """ Saves synchronized tracelog into a file 
+        """ Saves synchronized tracelog to a file 
             
             Arguments:
             filename -- Path to a *.kst
@@ -201,11 +211,22 @@ class SyncedTraceLog (TraceLog):
 
 class SyncedTraceLogLoader(object):
     
+    """ Performs loading of a *.kst file """
+    
     def __init__(self, filename):
+        """ Initialization. 
+            
+            Arguments:
+            filename -- path to a *.kst file
+        """
         self._filename = filename
         self._loaded = False
         
     def load(self):
+        """ Loads content of *.kst.
+            Returns tuple (number of processes, pointer size, list of traces'
+            binary data, XML description of program/project)
+        """
         if not self._loaded:
             self.pointer_size = 0
             self.traces = []
@@ -235,13 +256,15 @@ class SyncedTraceLogLoader(object):
         
 class SyncedTrace(Trace):
     
+    """ Synchronizes timestamps of events within one process. """
+    
     def __init__(self, data, process_id, pointer_size, minimal_event_diff, \
                                      minimum_msg_delay, \
                                      forward_amort, \
                                      backward_amort, \
                                      messages, \
                                      messenger):
-        """ Synchronizes events of one process.
+        """ Synchronizes timestamps of events within one process.
         
             Arguments:
             data -- content of a process's *.ktt file
@@ -252,10 +275,10 @@ class SyncedTrace(Trace):
             forward_amort -- see the SyncedTraceLog class
             backward_amort -- see the SyncedTraceLog class
             messages -- shared variable among SyncedTraces, 2-dimensional array
-                        of Queues, first coordinate is a sender of message,
-                        second is the recipient, Queues stores sent times.
+                        of SQueues, first coordinate is a sender of a message,
+                        second is the recipient, SQueues store sent events.
             messenger -- an object of the Messenger class, communicator between
-                            a SyncedTrace and a SyncedTraceLog
+                            the SyncedTrace and a SyncedTraceLog
         """
         Trace.__init__(self, data, process_id, pointer_size)
         self._minimal_event_diff = minimal_event_diff
@@ -283,8 +306,10 @@ class SyncedTrace(Trace):
             start_pointer -- a pointer value before an event unpacking/reading
             end_pointer -- a pointer value after the event unpacking/reading, 
                             if False self.pointer is used
-            is_receive -- marks a receive event
+            is_receive -- marks synchronization of a receive event
             sent_time -- a timestamp of corresponding send event
+            
+            Returns corrected time.
          """
         newtime = 0
         
@@ -299,10 +324,12 @@ class SyncedTrace(Trace):
         return newtime            
     
     def _clock(self, time):
-        """ Computes a new time for a process's internal event 
+        """ Computes a new time for a process's internal or send event 
             
             Arguments:
             time -- the time to be fixed
+            
+            Returns corrected time.
         """
         newtime = 0
         if self._last_event_time != 0:
@@ -321,6 +348,8 @@ class SyncedTrace(Trace):
             Arguments:
             time -- the time to be fixed
             sent_time -- time of the corresponding send event
+            
+            Returns corrected time.
         """
         newtime = 0
         if self._last_event_time != 0:
@@ -352,7 +381,7 @@ class SyncedTrace(Trace):
     
     def finalize(self):
         """ Finalize the synchronization of a trace. This should be called after
-            the timestamp correction of all events within the trace.
+            the timestamp correction of all traces within a tracelog.
         """
         if not self._backward_amort:
             return
@@ -360,7 +389,7 @@ class SyncedTrace(Trace):
             self._backward_amortization(task.original, task.time)
     
     def _do_BA(self, newtime, original):
-        """ Creates a new request for BA (task) and performs all previous tasks 
+        """ Creates a new request (task) for BA and performs all previous tasks 
             which are ready.
         """ 
         if not self._backward_amort:
@@ -389,7 +418,7 @@ class SyncedTrace(Trace):
             times for all preceding send events have been filled.
         
             Arguments:
-            origin_time -- original timestamp of an receive event
+            origin_time -- the original timestamp of receive event
             new_time -- corrected/synchronized timestamp of the event
         """
         offset = new_time - origin_time
@@ -403,7 +432,7 @@ class SyncedTrace(Trace):
         else:
             send_set = self._send_events.keys()
         
-        # Linear correction - a set of breakpoints arrangement
+        # Linear correction - formation of a set of breakpoints
         previous = SendEvent()
         delete_events = Queue()
         for event in send_set:
@@ -428,7 +457,8 @@ class SyncedTrace(Trace):
         # Repair times
         send_event = [0]
         local_offset = offset
-        # Is there any event that cannot be shifted by full amount of the offset
+        # Is there any event that cannot be shifted by full amount of the 
+        # offset?
         if linear_send_events:
             send_event = linear_send_events.popitem(False)
             local_offset = send_event[1].offset
@@ -470,12 +500,13 @@ class SyncedTrace(Trace):
         self._send_events = new_send_events        
     
     def are_receive_times_refilled(self, received_time=None):
-        """ Returns True if all current send events (SendEvent send_events) have 
-            refilled the receive time field.
+        """ Returns True if all send events (SendEvents) in chosen interval 
+            have been informed about the received time.
             
             Arguments:
             received_time -- time of a receive event which specifies an upper 
-                            border for a set of send events to be checked
+                            border for the set of send events that is going 
+                            to be checked
         """
         times = self._send_events.keys()
         if self._last_refilled_send_time is not None:
@@ -491,11 +522,11 @@ class SyncedTrace(Trace):
     
     def refill_received_time(self, sent_time, received_time, receiver, new_record=True):
         """ Matches receive time to a specific sent time and computes 
-            maximum offset
+            maximum offset.
             
             Arguments:
-            sent_time -- time of a corresponding send event
-            received_time -- time of a receipt of the msg to be filled
+            sent_time -- time of the corresponding send event in this trace
+            received_time -- the receive time 
             receiver -- ID of a process where the receive event happened
             new_record -- if True you are adding missing received time otherwise
                             you are updating an existing received time
@@ -521,21 +552,26 @@ class SyncedTrace(Trace):
         stream.close()
         return export
     
-    def set_init_time(self, increment):
-        """ Increase initial time of a process by the increment value
+    def set_init_time(self, increment, direct=False):
+        """ Increase initial time of a process by the increment
          
             Arguments:
-            increment -- an integer value which is added to the initial time        
+            increment -- an integer value which is added to the initial time
+            direct -- if True the function procedure is changed - the initial 
+                        time is set to the increment        
         """
         origin = self.info["inittime"]
-        newtime = str(int(origin) + increment)
+        if direct:
+            newtime = str(increment)
+        else:
+            newtime = str(int(origin) + increment)
         self.info["inittime"] = newtime
         self._header_info = self._header_info.replace(origin, newtime)
         
     
     def get_msg_sender(self):
-        """ Returns None or the id of a process, who is the sender of the received
-            message, if the next event is receive event
+        """ Returns None, or the id of a process which is the sender of the 
+            received message if the next event is receive event
         """
         if self.get_next_event_name() == "Recv ":
             tmp_pointer = self.pointer
@@ -547,11 +583,11 @@ class SyncedTrace(Trace):
             return None
         
     def get_last_received_sent_time(self):
-        """ Returns last received (got from messages) sent time. """
+        """ Returns last received (obtained from messages) sent time. """
         return self._last_received_sent_time
     
     def get_last_receive_event_time(self):
-        """ Returns time of last synchronized receive event """
+        """ Returns time of last synchronized receive event. """
         return self._last_receive_event_time
     
     def _repair_time(self, time, start_pointer, end_pointer):
@@ -576,7 +612,7 @@ class SyncedTrace(Trace):
             Arguments:
             time -- time to be synchronized
             pointer -- points to the start of event's data
-            receive -- mark True if you want to synchronize receive event
+            receive -- set True if you want to synchronize receive event
             origin_id -- if receive is True, specify id of the sender
         """
         if not receive:
@@ -617,27 +653,33 @@ class SyncedTrace(Trace):
         return self._data_list[-1]
     
     def _extra_tokens_add(self, pointer, extra, values):
+        """ Stores additional event's data. """
         if values:
             extra.append(self.data[pointer:self.pointer])
             
             
     
 class SQueue(Queue):
-    """ Classic Queue with possibility of reading an element to be popped """
+    """ Classic Queue with possibility of reading an element instead of popping """
     
     def __init__(self):
         Queue.__init__(self)
     
     def get_and_keep(self):
-        """ Returns an element to be popped but it does not pop it. """
+        """ Returns an element prepared for popping. """
         value = self.get()
         self.queue.appendleft(value)
         return value
     
 class Messenger(object):
-    """ Connector between SyncedTracLog and SyncedTrace """
+    """ Connector between SyncedTraceLog and SyncedTrace """
     
     def __init__(self, target):
+        """ Initialization.
+            
+            Arguments:
+            target -- Reference to SyncedTraceLog
+         """
         self._target = target
         
     def refill_received_time(self, target, send_time, receive_time, receiver, \
@@ -676,6 +718,13 @@ class RSTableElement(object):
     """ Reference to a send event """
     
     def __init__(self, send_event, origin_id):
+        """ Initialization.
+        
+            Arguments:
+            send_event -- reference to a send event
+            origin_id -- ID of the message sender
+        """
+        
         self.send_event = send_event
         self.origin_id = origin_id
     

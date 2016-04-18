@@ -26,13 +26,14 @@ from table import Table
 
 class TracelogComparator(object):
     
-    def __init__(self, tracelog_filepath, syncedtracelog_filepath):
-        
+    def __init__(self, tracelog_filepath, syncedtracelog_filepath, weak_sync):
+                
         t_queue = mp.Queue()
         st_queue = mp.Queue()
         tp = mp.Process(target=self._process_t, args=("original", 
                                                       tracelog_filepath,
-                                                      t_queue))
+                                                      t_queue,
+                                                      weak_sync))
         stp = mp.Process(target=self._process_t, args=("synced",
                                                       syncedtracelog_filepath,
                                                       st_queue))        
@@ -60,33 +61,23 @@ class TracelogComparator(object):
                      st_stats.get_idle_average()))
         
         processes = t_stats.get_processes_number()
+        
         q_ints = mp.Queue()
         func = t_stats.get_process_send_events_intervals
         t_ints = [func(p) for p in range(processes) if func(p) is not None]
         func = st_stats.get_process_send_events_intervals
         st_ints = [func(p) for p in range(processes) if func(p) is not None]
-        q_comm = mp.Queue()
-        func = t_stats.get_process_communication
-        t_comm = [func(p) for p in range(processes) if func(p) is not None]
-        func = st_stats.get_process_communication
-        st_comm = [func(p) for p in range(processes) if func(p) is not None]
+        
         
         bp_process = mp.Process(target=self._find_breakpoints, 
                                 args=(q_ints, t_ints, st_ints))
-        comm_process = mp.Process(target=self._check_communication_intervals, 
-                                args=(q_comm, t_comm, st_comm))
         
         bp_process.start()
-        comm_process.start()
         
         max_b, avg_b, count_b = q_ints.get()
-        max_c, avg_c = q_comm.get()
             
         bp_process.join()
-        comm_process.join()
         
-        rows.append(("Maximum change of a send-receive interval", 0, max_c))
-        rows.append(("Average change of a send-receive interval", 0, avg_c))
         rows.append(("Number of breakpoints", 0, count_b))
         rows.append(("Maximum arisen gap", 0, max_b))
         rows.append(("Average arisen gap", 0, avg_b))
@@ -119,39 +110,17 @@ class TracelogComparator(object):
             
         queue.put((max_interval, avg_int, ints))
     
-    def _check_communication_intervals(self, queue, t_comm, st_comm):
-        max_sr_interval = 0
-        sr_interval = 0
-        ints = 0
-        
-        if t_comm:
-            for p, process in enumerate(t_comm):
-                for n, comm in enumerate(process):
-                    if comm[3]:
-                        continue
-                    synced = st_comm[p][n]
-                    diff = synced[2] - comm[2]
-                    if diff != 0:
-                        if abs(diff) > abs(max_sr_interval):
-                            max_sr_interval = diff 
-                        sr_interval += abs(diff)
-                        ints += 1
-            
-            if ints != 0:
-                sr_interval = sr_interval / ints
-        
-        queue.put((max_sr_interval, sr_interval))
-    
-    def _process_t(self, tracelog_type, filename, queue):
+    def _process_t(self, tracelog_type, filename, queue, weak_sync=False):
         if tracelog_type == "original":
             tracelog = TComparable(filename)
         elif tracelog_type == "synced":
             tracelog = STComparable(filename)
         tracelog.init()
         if tracelog_type == "original":
-            tracelog.process()
+            tracelog.process(True, weak_sync)
         elif tracelog_type == "synced":
             tracelog.process(False)
+        
         queue.put(tracelog.get_statistics())
 
 class ComparableTraceLog(object):
@@ -182,15 +151,19 @@ class ComparableTraceLog(object):
         return ComparableTrace(data, process_id, pointer_size, messages,
                                statistics, "original")
     
-    def process(self, init_times=True):
+    def process(self, init_times=True, weak_sync=False):
         if not self._initialized:
             return
-        # Make an init time of the process with the lowest init time reference
-        # time for all events from all processes
+
         if init_times:
-            starttime = min([ trace.get_init_time() for trace in self.traces ])
-            for trace in self.traces:
-                trace.time_offset = trace.get_init_time() - starttime
+            if weak_sync:
+                maxspawntrace = max( self.traces, key=lambda x: x.get_next_event_time() )
+                for trace in self.traces:
+                    trace.time_offset = maxspawntrace.get_next_event_time() - trace.get_next_event_time()
+            else:
+                starttime = min([ trace.get_init_time() for trace in self.traces ])
+                for trace in self.traces:
+                    trace.time_offset = trace.get_init_time() - starttime
         for t in self.traces:
             t.record_first_event()
         # List of unprocessed processes
@@ -307,22 +280,9 @@ class ComparableTrace(Trace):
         if self._last_event_type == "I":
             self._statistics.add_idle_interval(time + self.time_offset - self._last_event_time)
         elif self._last_event_type == "M":
-            self._statistics.add_send_event_interval(time + self.time_offset - self._last_event_time,
-                                                      self.process_id)
-        if receive:
-            if origin_id is None:
-                raise Exception("Origin_id for a receive event not entered!")
-            sent_time = self._messages[origin_id][self.process_id].get()
-            if time + self.time_offset < sent_time:
-                self._statistics.add_communication(self.process_id,
-                                                   sent_time,
-                                                   time + self.time_offset,
-                                                   sent_time - time + self.time_offset,
-                                                   True)
-            else:
-                self._statistics.add_communication(self.process_id,
-                                                   sent_time,
-                                                   time + self.time_offset, 0)
+            self._statistics.add_send_event_interval(self.process_id, 
+                                                     time + self.time_offset \
+                                                      - self._last_event_time)
         self._last_event_time = time + self.time_offset
         self._last_event_type = self._current_event_type
         self._statistics.set_finish(time + self.time_offset)
@@ -334,7 +294,6 @@ class Statistics(object):
     def __init__(self):
         self._first_event = sys.maxint
         self._last_event = 0
-        self._communication = {}
         self._idle_time = 0
         self._idle_counter = 0
         self._send_event_intervals = {}
@@ -342,16 +301,6 @@ class Statistics(object):
 
     def register_process(self):
         self._processes += 1
-        
-    def add_communication(self, process_id, sent, received, interval=0, 
-                            violated=False):
-        if process_id in self._communication.keys():
-            self._communication[process_id].append((sent, received, interval, 
-                                                    violated))
-        else:
-            self._communication[process_id] = [(sent, received, interval, 
-                                                violated)]
-        
     
     def add_idle_interval(self, interval):
         self._idle_time += interval
@@ -362,11 +311,6 @@ class Statistics(object):
             self._send_event_intervals[process_id].append(interval)
         else:
             self._send_event_intervals[process_id] = [interval]
-    
-    def get_process_communication(self, process_id):
-        if process_id in self._communication.keys():
-            return self._communication[process_id]
-        return None
     
     def get_process_send_events_intervals(self, process_id):            
         if process_id in self._send_event_intervals.keys():
