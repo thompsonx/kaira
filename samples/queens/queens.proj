@@ -1,0 +1,364 @@
+<project library-octave="False" library-rpc="False" target_env="C++"><configuration><parameter default="8" description="Number of queens" name="N" policy="mandatory" type="int" /><build-option name="LIBS" /><build-option name="CFLAGS">-O2 -g</build-option><head-code>
+#include &lt;deque&gt;
+
+class Solution {
+	public: 
+		Solution(int size) {
+			step = 0;
+			this-&gt;size = size;
+			solution = new int[size];
+		}
+
+		Solution(const Solution &amp;s) {
+			step = s.step;
+			size = s.size;
+			solution = new int[size];
+			memcpy(solution, s.solution, size * sizeof(int));
+		}
+
+		~Solution() {
+			delete[] solution;
+		}
+
+		
+		Solution() {
+			size=0;
+			solution=NULL;
+		}
+		
+		Solution &amp; operator= (const Solution &amp;s) {
+        		if (this != &amp;s)
+			{
+				step = s.step;
+				size = s.size;
+				if (solution!=NULL) delete [] solution;
+				solution = new int[size];
+				memcpy(solution, s.solution, size * sizeof(int));
+			}
+	        	return *this;
+		}
+		
+		int step;
+		int *solution;
+		int size;
+
+		bool isReadyToSolve() { return step==size;} 
+		void addStep(int x) {
+			solution[step]=x;
+			step++;
+		}
+		
+		std::string token_name() const {
+			std::stringstream ss;
+			ss &lt;&lt; "Solution: ";
+			for(int i=0;i&lt;step;i++) ss&lt;&lt;" "&lt;&lt; solution[i];
+			return ss.str();
+		}
+
+		void pack(ca::Packer &amp;packer) const {
+			packer &lt;&lt; step;
+			packer &lt;&lt; size;
+			packer.pack_data(solution, size * sizeof(int));
+		}
+	
+		void unpack(ca::Unpacker &amp;unpacker) {
+			unpacker &gt;&gt; step;
+			unpacker &gt;&gt; size;
+			solution = new int[size];
+			unpacker.unpack_data(solution, size * sizeof(int));
+		}
+
+};
+
+class Request {
+	public: 
+		Request(int process, int token) {
+			this-&gt;process = process;
+			this-&gt;token = token;
+		}
+
+		Request(const Request &amp;p) {
+			this-&gt;process = p.process;
+			this-&gt;token = p.token;
+		}
+
+		~Request() {
+		}
+
+		
+		Request() {
+			this-&gt;process = -1;
+			this-&gt;token = -1;
+		}
+		
+		Request &amp; operator= (const Request &amp;r) {
+        		if (this != &amp;r)
+			{
+				this-&gt;process = r.process;
+				this-&gt;token = r.token;
+			}
+	        	return *this;
+		}
+		
+		int process;
+		int token;
+		
+		
+		std::string token_name() const {
+			std::stringstream ss;
+			ss &lt;&lt; "Request: "&lt;&lt;process&lt;&lt;", "&lt;&lt;token;
+			return ss.str();
+		}
+
+		void pack(ca::Packer &amp;packer) const {
+			packer &lt;&lt; process;
+			packer &lt;&lt; token;
+		}
+	
+		void unpack(ca::Unpacker &amp;unpacker) {
+			unpacker &gt;&gt; process;
+			unpacker &gt;&gt; token;
+		}
+};
+
+
+class Job {
+public:
+	Solution solution;
+	int target;
+	
+	Job() {
+		target = -1;
+	}
+	
+	Job(int target, Solution &amp;solution) {
+		this-&gt;target = target;
+		this-&gt;solution = solution;
+	}
+
+	Job(const Job &amp;j) {
+		target = j.target;
+		solution = j.solution;
+	}
+
+	Job &amp; operator= (const Job &amp;j) {
+        	if (this != &amp;j)
+		{
+			target = j.target;
+			solution = j.solution;
+        	}
+        	return *this;
+	}
+
+	
+	std::string token_name() const {
+		std::stringstream ss;
+		ss &lt;&lt; "Job: target " &lt;&lt; target;
+		return ss.str();
+	}
+	void pack(ca::Packer &amp;packer) const {
+		packer &lt;&lt; target;
+		packer &lt;&lt; solution;
+	}
+
+	void unpack(ca::Unpacker &amp;unpacker) {
+		unpacker &gt;&gt; target;
+		unpacker &gt;&gt; solution;
+	}
+};
+
+class Stat {
+public:
+	int *counters;
+	int *tokens;
+	int size;
+	int first;
+	
+	Stat() {
+		counters=NULL;
+		tokens=NULL;
+		size=0;
+		first=1;
+	}
+	
+	Stat(int size) {
+		this-&gt;size=size;
+		counters= new int[size];
+		tokens= new int[size];
+		for(int i=0;i&lt;size;i++) {
+			counters[i]=0;
+			tokens[i]=-1;
+		}
+		first = 1;
+	}	
+
+	~Stat() {
+		if (counters != NULL) delete[] counters;
+		if (tokens != NULL) delete[] tokens;
+	}
+	
+	Stat(const Stat &amp;s) {
+		first = s.first;
+		size = s.size;
+
+		if (s.size &gt; 0) {
+			counters = new int[size];
+			tokens = new int[size];
+
+			memcpy(counters, s.counters, size * sizeof(int));
+			memcpy(tokens, s.tokens, size * sizeof(int));
+		}else {
+			counters=NULL;
+			tokens=NULL;
+		}
+	}
+	
+	Stat &amp; operator= (const Stat &amp;s) {
+        	if (this != &amp;s)
+		{
+			first = s.first;
+			if (size !=s.size) {
+				if (counters!=NULL) delete [] counters;
+				if (tokens !=NULL) delete [] tokens;
+				if (s.size &gt; 0) {
+					counters = new int[size];
+					tokens = new int[size];
+				}
+			}
+			size = s.size;
+			if (size &gt;0) {
+				memcpy(counters, s.counters, size * sizeof(int));
+				memcpy(tokens, s.tokens, size * sizeof(int));
+			}else {
+				counters=NULL;
+				tokens=NULL;
+			}
+		}
+	       	return *this;
+	}
+		
+	void print(int process) {
+		for(int i=0;i&lt;size;i++) {
+			printf(" (%d,%d c: %d)", process,tokens[i], counters[i]);
+		}
+		printf("\n");
+	}
+	bool isEverythingComputed() {
+		if (first==0) return false;
+		for(int i=0;i&lt;size;i++) {
+			if (counters[i]&lt;2) return false;
+		}
+		first=0;
+		return true;
+	}
+
+	std::string token_name() const {
+		std::stringstream ss;
+		ss &lt;&lt; "Stat: ";
+		for(int i=0;i&lt;size;i++) ss&lt;&lt;"("&lt;&lt; tokens[i]&lt;&lt;","&lt;&lt;counters[i]&lt;&lt;") ";
+		return ss.str();
+	}
+
+	void pack(ca::Packer &amp;packer) const {
+		packer &lt;&lt; first;
+		packer &lt;&lt; size;
+		packer.pack_data(tokens, size * sizeof(int));
+		packer.pack_data(counters, size * sizeof(int));
+	}
+	
+	void unpack(ca::Unpacker &amp;unpacker) {
+		unpacker &gt;&gt; first;
+		unpacker &gt;&gt; size;
+		tokens = new int[size];
+		unpacker.unpack_data(tokens, size * sizeof(int));
+		counters = new int[size];
+		unpacker.unpack_data(counters, size * sizeof(int));
+
+	}
+
+};
+
+namespace ca { 
+
+	CA_TOKEN_NAME(std::deque&lt;Solution&gt;, queue) {
+		std::stringstream s;
+                s &lt;&lt; "QUEUE: " &lt;&lt; queue.size();
+                return s.str();
+        }
+
+        CA_PACK(std::deque&lt;Solution&gt;, packer, queue) {
+        	packer&lt;&lt;queue.size();
+	        for(int i=0;i&lt;queue.size();i++) {
+                	packer&lt;&lt; queue.at(i);
+                }
+        }
+
+        CA_UNPACK(std::deque&lt;Solution&gt;, unpacker, queue) {
+        	int size;
+        	Solution s;
+                unpacker &gt;&gt; size;
+                for(int i=0;i&lt;size;i++) {
+                	unpacker &gt;&gt; s;
+                	queue.push_back(s);
+                }
+        }
+}</head-code></configuration><net id="101" name="queens"><area id="125" sx="113" sy="220" x="-263" y="-58"><init x="-263" y="-73">ca::range(0, ctx.process_count())</init></area><area id="168" sx="96" sy="96" x="240" y="96"><init x="240" y="81">ca::range(0, ctx.process_count())</init></area><area id="170" sx="114" sy="278" x="-722" y="-230"><init x="-722" y="-245">ca::range(0, ctx.process_count())</init></area><place id="102" label-x="-208" label-y="-16" name="" radius="20" sx="0" sy="0" x="-208" y="-16"><place-type x="-191" y="1">std::deque&lt;Solution&gt;</place-type><init x="-191" y="-46" /><code>	std::deque&lt;Solution&gt; d;
+	if (ctx.process_id() == 0) d.push_back(Solution(param::N()));
+	place.add(d);
+</code><trace trace-tokens="False" /></place><place id="105" label-x="48" label-y="-208" name="Process IDs" radius="20" sx="45" sy="3" x="48" y="-208"><place-type x="96" y="-176">Request</place-type><init x="65" y="-238" /><trace trace-tokens="False" /></place><place id="109" label-x="-672" label-y="-16" name="" radius="20" sx="0" sy="0" x="-672" y="-16"><place-type x="-654" y="8">int</place-type><init x="-654" y="-46">[0]</init><trace trace-tokens="False"><function name="ca::token_name" return-type="std::string" /></trace></place><place id="111" label-x="-208" label-y="128" name="" radius="20" sx="0" sy="0" x="-208" y="128"><place-type x="-191" y="145">int</place-type><init x="-191" y="98">[0]</init><trace trace-tokens="False"><function name="ca::token_name" return-type="std::string" /></trace></place><place id="129" label-x="-480" label-y="80" name="" radius="20" sx="0" sy="0" x="-480" y="80"><place-type x="-450" y="92">Job</place-type><init x="-463" y="50" /><trace trace-tokens="False" /></place><place id="134" label-x="-480" label-y="-112" name="" radius="20" sx="0" sy="0" x="-480" y="-112"><place-type x="-463" y="-95">Request</place-type><init x="-463" y="-142" /><trace trace-tokens="False"><function name="ca::token_name" return-type="std::string" /></trace></place><place id="139" label-x="-112" label-y="192" name="" radius="20" sx="0" sy="0" x="-112" y="192"><place-type x="-95" y="209">Solution</place-type><init x="-95" y="162" /><trace trace-tokens="False" /></place><place id="164" label-x="288" label-y="144" name="" radius="20" sx="0" sy="0" x="288" y="144"><place-type x="305" y="161">int</place-type><init x="305" y="114">[0]</init><trace trace-tokens="False"><function name="ca::token_name" return-type="std::string" /></trace></place><place id="171" label-x="-672" label-y="-96" name="" radius="20" sx="0" sy="0" x="-672" y="-96"><place-type x="-655" y="-79">Stat</place-type><init x="-655" y="-126" /><code>	Stat stat(ctx.process_count());
+	place.add(stat);
+</code><trace trace-tokens="False" /></place><place id="175" label-x="-480" label-y="-288" name="" radius="20" sx="0" sy="0" x="-480" y="-288"><place-type x="-463" y="-271">int</place-type><init x="-463" y="-318" /><trace trace-tokens="False"><function name="ca::token_name" return-type="std::string" /></trace></place><place id="179" label-x="-176" label-y="-288" name="" radius="20" sx="0" sy="0" x="-176" y="-288"><place-type x="-159" y="-271">std::vector&lt;int&gt;</place-type><init x="-159" y="-318" /><trace trace-tokens="False"><function name="ca::token_name" return-type="std::string" /></trace></place><transition clock="False" collective="False" id="103" label-x="-419.0" label-y="7.0" name="Compute" priority="" sx="122" sy="36" x="-544" y="-32"><guard x="-544" y="-50" /><code>	if (!var.queue.empty()) {
+		Solution s = var.queue.back();
+		var.queue.pop_back();
+		if (s.isReadyToSolve()) {
+			var.counter++;	
+		}else {
+			for(int i=0;i&lt;param::N();i++) {
+				Solution newSolution(s);
+				newSolution.addStep(i);
+				var.queue.push_back(newSolution);
+			}
+		}
+	}
+	ca::Token&lt;Request&gt; *t = var.requests.begin();
+	while (t != NULL) {
+		
+		if (var.queue.empty()) {
+			var.no_work.add(t-&gt;value);
+		}else{
+			Solution s = var.queue.front();
+			var.queue.pop_front();
+		
+			var.jobs.add(Job(t-&gt;value.process, s));
+		}
+		t = var.requests.next(t);
+	}
+	
+</code><trace>fire</trace></transition><transition clock="False" collective="False" id="113" label-x="54.0" label-y="18.0" name="Request Work" priority="" sx="88" sy="36" x="32" y="-32"><guard x="32" y="-48">(queue.empty()) &amp;&amp; waiting == 0</guard><code>	Request r(ctx.process_id(),var.token_counter);
+	var.stealing = r;
+	var.waiting =1;
+</code><trace>fire</trace></transition><transition clock="False" collective="False" id="131" label-x="-459.0" label-y="220.0" name="Send" priority="2" sx="70" sy="36" x="-512" y="176"><guard x="-512" y="156" /><code>	var.solution = var.job.solution;
+	var.target = var.job.target;
+</code><trace>fire</trace></transition><transition clock="False" collective="False" id="136" label-x="-419.0" label-y="-183.0" name="Shift to next" priority="1" sx="118" sy="36" x="-542" y="-223"><guard x="-542" y="-243" /><code>	
+	if (var.statistic.tokens[var.process.process] == var.process.token) {
+		var.statistic.counters[var.process.process]++;
+	}else {
+		var.statistic.tokens[var.process.process] = var.process.token;
+		var.statistic.counters[var.process.process]=1;
+	}
+	if (var.statistic.isEverythingComputed()) {
+		var.statistic.print(ctx.process_id());		
+		var.result.add(var.counter);
+	}
+
+</code><trace>fire</trace></transition><transition clock="False" collective="False" id="153" label-x="48.0" label-y="159.0" name="Insert" priority="2" sx="70" sy="36" x="0" y="112"><guard x="0" y="92" /><code>	var.queue.push_back(Solution(var.solution));
+	var.waiting = 0;	
+</code><trace>fire</trace></transition><transition clock="False" collective="True" id="178" label-x="-356.0" label-y="-327.0" name="" priority="4" sx="70" sy="36" x="-371" y="-306"><guard x="-371" y="-326" /><trace>fire</trace><root x="-331" y="-266">0</root></transition><transition clock="False" collective="False" id="182" label-x="31.0" label-y="-259.0" name="Write Results" priority="5" sx="70" sy="36" x="16" y="-304"><guard x="16" y="-324" /><code>	int count =0;
+	for (int i = 0; i &lt; var.results.size(); i++) {
+		count += var.results[i];
+	}
+	printf("Number of posibilities: %d (%d)\n", count,var.results.size());
+
+
+	ctx.quit();		
+</code><trace>fire</trace></transition><edge bidirectional="true" from_item="102" id="104" to_item="103"><inscription x="-338.0" y="-32.0">queue</inscription></edge><edge bidirectional="true" from_item="109" id="110" to_item="103"><inscription x="-611.0" y="-9.0">counter</inscription></edge><edge from_item="113" id="114" to_item="105"><inscription x="80.0" y="-117.0">stealing @ (ctx.process_id() + 1) % ctx.process_count()</inscription></edge><edge bidirectional="true" from_item="113" id="118" to_item="111"><inscription x="-23.0" y="52.0">waiting</inscription></edge><edge bidirectional="true" from_item="113" id="120" to_item="102"><inscription x="-96.0" y="-31.0">queue</inscription></edge><edge from_item="105" id="128" to_item="103"><inscription x="-302.0" y="-129.0">[guard(size &gt; 0 || (!(queue.empty()))), bulk]requests</inscription></edge><edge from_item="103" id="130" to_item="129"><inscription x="-468.0" y="31.0">[bulk]jobs</inscription></edge><edge from_item="129" id="132" to_item="131"><inscription x="-464.0" y="120.0">job</inscription></edge><edge from_item="103" id="135" to_item="134"><inscription x="-515.0" y="-62.0">[bulk]no_work</inscription></edge><edge from_item="134" id="137" to_item="136"><inscription x="-466.0" y="-165.0">process</inscription></edge><edge from_item="136" id="138" to_item="105"><inscription x="-275.0" y="-223.0">process@((ctx.process_id() + 1) % ctx.process_count())</inscription></edge><edge from_item="131" id="140" to_item="139"><inscription x="-401.0" y="175.0">solution@target</inscription></edge><edge from_item="139" id="154" to_item="153"><inscription x="-48.0" y="176.0">solution</inscription></edge><edge bidirectional="true" from_item="102" id="155" to_item="153"><inscription x="-92.0" y="53.0">queue</inscription></edge><edge bidirectional="true" from_item="153" id="156" to_item="111"><inscription x="-93.0" y="128.0">waiting</inscription></edge><edge from_item="164" id="165" to_item="113"><inscription x="153.0" y="94.0">token_counter</inscription></edge><edge from_item="113" id="166" to_item="164"><inscription x="171.0" y="-8.0">token_counter+1</inscription><point x="288" y="-16" /></edge><edge from_item="171" id="172" to_item="136"><inscription x="-581.0" y="-165.0">statistic</inscription></edge><edge from_item="136" id="173" to_item="171"><inscription x="-645.0" y="-223.0">statistic</inscription><point x="-672" y="-208" /></edge><edge bidirectional="true" from_item="109" id="176" to_item="136"><inscription x="-579.0" y="-108.0">counter</inscription></edge><edge from_item="136" id="177" to_item="175"><inscription x="-482.0" y="-255.0">[bulk]result</inscription></edge><edge from_item="175" id="180" to_item="178"><inscription x="-432.0" y="-304.0">result</inscription></edge><edge from_item="178" id="181" to_item="179"><inscription x="-288.0" y="-304.0">[gather] result</inscription></edge><edge from_item="179" id="183" to_item="182"><inscription x="-85.0" y="-287.0">results</inscription></edge></net></project>
