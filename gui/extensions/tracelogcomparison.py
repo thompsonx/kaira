@@ -64,6 +64,10 @@ class TracelogComparison(extensions.Operation):
         settings = self.display_settings(app)
         if settings is None:
             return
+        if settings[0] is None or settings[1] is None:
+            app.console_write("No tracelog chosen! Comparison was canceled.\n",
+                              "error")
+            return
         
         comparator = TracelogComparator(settings[0], settings[1], settings[2])
         

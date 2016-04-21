@@ -79,7 +79,13 @@ class TracelogVerifier(extensions.Operation):
         settings = self.display_settings(app)
         if settings is None:
             return
+        if settings[0] is None:
+            app.console_write("No tracelog chosen! Verification was canceled.\n",
+                              "error")
+            return
+        
         t = VTraceLog(settings[0], settings[1])
+        
         return self.create_table(app, t.get_results())
                 
 

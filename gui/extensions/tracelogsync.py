@@ -20,6 +20,7 @@
 import settingswindow
 import extensions
 import datatypes
+import gtk
 from syncedtracelog import SyncedTraceLog
 from gtk import RESPONSE_APPLY
 
@@ -76,7 +77,8 @@ class TracelogSync(extensions.Operation):
         if settings is None:
             return
         if settings[5] is None:
-            print "No file chosen!"
+            app.console_write("No tracelog chosen! Synchronization was canceled.\n",
+                              "error")
             return
         
         syncedtracelog = SyncedTraceLog(fromtracelog=(settings[5], settings))
@@ -89,7 +91,6 @@ class TracelogSync(extensions.Operation):
         sourceView._cb_store()
         
         sourceView._cb_delete()
-        
 
 extensions.add_operation(TracelogSync)
 
