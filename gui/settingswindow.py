@@ -1,5 +1,6 @@
 #
-#    Copyright (C) 2013, 2014 Martin Surkovsky
+#    Copyright (C) 2013, 2014, 2016 Martin Surkovsky, Tomas Panoc
+#                                    
 #
 #    This file is part of Kaira.
 #
