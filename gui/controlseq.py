@@ -23,6 +23,8 @@ import gtkutils
 import objectlist
 import xml.etree.ElementTree as xml
 
+import utils
+
 command_parser = re.compile(
    "(?P<process>\d+) (?P<action>[SFTR])( ((?P<arg_int>\d+)|(?P<arg_str>.*)))?"
 )
@@ -105,7 +107,8 @@ class ControlSequence:
             else:
                 arg = match.group("arg_str")
             return on_transition_start(process, arg)
-        else: # action == "F":
+        else:
+            assert action == "F"
             return on_transition_finish(process)
 
     def get_commands_size(self):
@@ -172,21 +175,40 @@ class SequenceView(gtkutils.SimpleList):
 
 class SequenceListWidget(gtk.HPaned):
 
-    def __init__(self, project):
+    def __init__(self, app, project):
         gtk.HPaned.__init__(self)
+        self.app = app
         self.project = project
-        buttons = [
-            (None, gtk.STOCK_REMOVE, self._remove_sequence)
-        ]
+        self.export_transition_id = True
 
-        self.objlist = objectlist.ObjectList([("_", object), ("Sequences", str) ], buttons)
+        vbox = gtk.VBox()
+        button = gtk.Button(stock=gtk.STOCK_REMOVE)
+        button.connect("clicked", lambda w: self._remove_sequence(
+                self.objlist.selected_object()))
+        vbox.pack_start(button, False, True)
+
+        btn_box = gtk.HButtonBox()
+        btn_box.set_layout(gtk.BUTTONBOX_START)
+        button = gtk.CheckButton("Export transition IDs")
+        button.set_active(self.export_transition_id)
+        button.connect("toggled", self._cb_export_transition_id)
+        btn_box.add(button)
+
+        button = gtk.Button("Export")
+        button.connect("clicked", lambda w: self._export_control_sequence(
+                self.objlist.selected_object()))
+        btn_box.add(button)
+        vbox.pack_start(btn_box, False, False)
+
+        self.objlist = objectlist.ObjectList([("_", object), ("Sequences", str) ])
         self.objlist.object_as_row = lambda obj: [ obj, obj.name ]
         self.objlist.cursor_changed = self.on_cursor_changed
-        self.objlist.set_size_request(150, 0)
+        self.objlist.set_size_request(175, 0)
         self.event = self.project.set_callback(
             "sequences_changed",
             lambda: self.objlist.refresh(project.sequences))
-        self.pack1(self.objlist, False)
+        vbox.pack_start(self.objlist, True, True)
+        self.pack1(vbox, False)
 
         self.view = SequenceView()
         self.pack2(self.view, True)
@@ -206,3 +228,91 @@ class SequenceListWidget(gtk.HPaned):
     def _remove_sequence(self, obj):
         if obj:
             self.project.remove_sequence(obj)
+
+    def _export_control_sequence(self, sequence):
+        VERSION = "1.0"
+        TYPE = "transition_id" if self.export_transition_id else "transition_name"
+
+        if sequence:
+            dialog = gtk.FileChooserDialog("Export Control Sequence",
+                                           self.app.window,
+                                           gtk.FILE_CHOOSER_ACTION_SAVE,
+                                           (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
+                                           gtk.STOCK_SAVE, gtk.RESPONSE_OK))
+            dialog.set_default_response(gtk.RESPONSE_OK)
+            dialog.set_current_name("{0}.kcs.xml".format(sequence.name))
+
+            skcs_filter = gtk.FileFilter() # Kaira Control Sequence
+            skcs_filter.set_name("Control Sequence (.kcs.xml)")
+            dialog.add_filter(skcs_filter)
+
+            try:
+                response = dialog.run()
+                filename = dialog.get_filename()
+            finally:
+                dialog.destroy()
+
+            net = self.project.build_net
+
+            transitions = {}
+            for t in net.transitions():
+                transitions["#{0}".format(t.id)] = t
+            for t in net.transitions():
+                transitions[utils.sanitize_name(t.get_name())] = t
+
+            running_transitions = {}
+            if response == gtk.RESPONSE_OK:
+                cmdlines = "\n"
+                for command in sequence.commands:
+                    match = command_parser.match(command)
+                    if match is None:
+                        raise ControlSequenceException("Invalid format: ", command)
+
+                    process = int(match.group("process"))
+                    action = match.group("action")
+
+                    if action == "T" or action == "S":
+                        arg = match.group("arg_int")
+                        if arg is None:
+                            arg = match.group("arg_str")
+                        if not transitions.has_key(arg):
+                            raise ControlSequenceException(
+                                    "Transition '{0}' not found.".format(arg))
+
+                        t = transitions[arg]
+                        if self.export_transition_id:
+                            tid = t.id
+                        else:
+                            tid = utils.sanitize_name(t.get_name_or_id())
+                        cmdlines += "{0} {1} {2}\n".format(process, action, tid)
+                        if action == "S":
+                            if running_transitions.has_key(process):
+                                running_transitions[process].push(t.id)
+                            else:
+                                running_transitions[process] = [t.id]
+                    elif action == "R":
+                        arg_int = match.group("arg_int")
+                        if arg_int is None:
+                            raise ControlSequenceException("Invalid format of receive.")
+                        cmdlines += "{0}\n".format(command)
+                    else:
+                        assert action == "F"
+                        if not running_transitions.has_key(process) or \
+                                not running_transitions[process]:
+                            raise ControlSequenceException(
+                                "Invalid sequence. Transition fire action is missing.")
+
+                        tid = running_transitions[process].pop()
+                        cmdlines += "{0} {1} {2}\n".format(process, action, tid)
+
+                element = xml.Element("sequence")
+                element.set("name", sequence.name)
+                element.set("type", TYPE)
+                element.set("version", VERSION)
+                element.text = cmdlines
+
+                tree = xml.ElementTree(element)
+                tree.write(filename)
+
+    def _cb_export_transition_id (self, widget):
+        self.export_transition_id = widget.get_active()

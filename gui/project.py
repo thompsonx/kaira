@@ -48,6 +48,7 @@ class Project(EventSource):
         self.simconfig = SimConfig()
         self.error_messages = {}
         self.generator = None # PTP generator
+        self.generator_has_nets = False
         self.build_net = None
 
         # Library options
@@ -60,24 +61,34 @@ class Project(EventSource):
         else:
             return ""
 
-    def get_generator(self):
+    def get_generator(self, load_nets=True):
         """ Can raise PtpException """
-        if self.generator:
+        if self.generator and (not load_nets or self.generator_has_nets):
             return self.generator
         build_config = BuildConfig()
         build_config.project_name = self.get_name()
         build_config.target_env = self.get_target_env_name()
         build_config.tracing = False
         build_config.nets = self.nets
-        self.generator = ptp.get_generator_from_xml(self.export_xml(build_config))
+        self.generator_has_nets = load_nets
+        self.generator = ptp.get_generator_from_xml(
+            self.export_xml(build_config), load_nets)
         return self.generator
 
     def get_build_config(self, name):
+        if name == "release/mpi":
+            name = "release"
+            mpi = True
+        else:
+            mpi = False
         build_config = BuildConfig()
         build_config.directory = os.path.join(self.get_directory(), name)
         build_config.project_name = self.get_name()
 
         use_build_net = True
+
+        if mpi:
+            build_config.make_args = ("mpi",)
 
         if name == "statespace":
             build_config.operation = "statespace"
@@ -323,6 +334,7 @@ class BuildConfig:
     target_env = None
     operation = None
     library = False
+    make_args = ()
 
     def get_filename(self, filename):
         return os.path.join(self.directory, filename)

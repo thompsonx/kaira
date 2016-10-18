@@ -2,6 +2,7 @@
 #    Copyright (C) 2010-2013 Stanislav Bohm
 #                  2012 Martin Kozubek
 #                  2012 Lukas Tomaszek
+#                  2014 Jan Homola
 #
 #    This file is part of Kaira.
 #
@@ -32,6 +33,7 @@ import undo
 import codeedit
 import objectlist
 import tracing
+import completion
 
 def netname_dialog(net, mainwindow):
     builder = gtkutils.load_ui("netname-dialog")
@@ -103,7 +105,7 @@ class NetEditor(gtk.VBox):
         self.canvas.config.configure()
         self.redraw()
 
-    def switch_to_net(self, net, select_in_netlist = True):
+    def switch_to_net(self, net, select_in_netlist=True):
         self.net = net
         if self.canvas: # Bootstrap problem
             self.canvas.config.set_net(net, None)
@@ -180,6 +182,16 @@ class NetEditor(gtk.VBox):
             self.net.changed()
 
     def _controls(self):
+        def add_radio_shortcut(accel_group, widget, key, ctrl=False):
+            mask = 0
+            if ctrl:
+                mask |= gtk.gdk.CONTROL_MASK
+            accel_group.connect_group(gtk.gdk.keyval_from_name(key),
+                                      mask, gtk.ACCEL_VISIBLE,
+                                      lambda a, b, c, d: activate_radio(widget))
+        def activate_radio(widget):
+            widget.set_active(True)
+
         icon_arrow = gtk.image_new_from_file(
                 os.path.join(paths.ICONS_DIR, "arrow.svg"))
         icon_transition = gtk.image_new_from_file(
@@ -202,56 +214,75 @@ class NetEditor(gtk.VBox):
         button1 = gtk.RadioToolButton(None)
         button1.connect("toggled", lambda w: self.set_mode("edit"))
         button1.set_stock_id(gtk.STOCK_EDIT)
+        button1.set_tooltip_text("Edit")
         toolbar.add(button1)
 
         button2 = gtk.RadioToolButton(button1, None)
         button2.connect("toggled", lambda w: self.set_mode("tracing"))
+        button2.set_tooltip_text("Tracing")
         button2.set_icon_widget(icon_trace)
         toolbar.add(button2)
 
         button2 = gtk.RadioToolButton(button1, None)
         button2.connect("toggled", lambda w: self.set_mode("simrun"))
+        button2.set_tooltip_text("Simulation")
         button2.set_icon_widget(icon_simrun)
         toolbar.add(button2)
 
         button2 = gtk.RadioToolButton(button1, None)
         button2.connect("toggled", lambda w: self.set_mode("verif"))
+        button2.set_tooltip_text("Verification")
         button2.set_icon_widget(icon_verif)
         toolbar.add(button2)
         toolbar.add(gtk.SeparatorToolItem())
 
         self.button_undo = gtk.ToolButton()
         self.button_undo.connect("clicked", lambda w: self.undo())
+        self.button_undo.set_tooltip_text("Undo")
         self.button_undo.set_stock_id(gtk.STOCK_UNDO)
 
         self.button_redo = gtk.ToolButton()
         self.button_redo.connect("clicked", lambda w: self.redo())
+        self.button_redo.set_tooltip_text("Redo")
         self.button_redo.set_stock_id(gtk.STOCK_REDO)
 
         toolbar.add(self.button_undo)
         toolbar.add(self.button_redo)
         toolbar.add(gtk.SeparatorToolItem())
 
+        ag = gtk.AccelGroup()
+        self.app.window.add_accel_group(ag)
+
         button1 = gtk.RadioToolButton(None,None)
         button1.connect("toggled", lambda w: self.set_tool("selection"))
+        button1.set_tooltip_text("Selection (Ctrl+S)")
         button1.set_icon_widget(icon_arrow)
         self.button_selection = button1
+        add_radio_shortcut(ag, button1, "s", ctrl=True)
 
-        button2 = gtk.RadioToolButton(button1,None)
+        button2 = gtk.RadioToolButton(button1, None)
         button2.connect("toggled", lambda w: self.set_tool("transition"))
+        button2.set_tooltip_text("Transition (Ctrl+R)")
         button2.set_icon_widget(icon_transition)
+        add_radio_shortcut(ag, button2, "r", ctrl=True)
 
         button3 = gtk.RadioToolButton(button1,None)
         button3.connect("toggled", lambda w: self.set_tool("place"))
+        button3.set_tooltip_text("Place (Ctrl+E)")
         button3.set_icon_widget(icon_place)
+        add_radio_shortcut(ag, button3, "e", ctrl=True)
 
         button4 = gtk.RadioToolButton(button1,None)
         button4.connect("toggled", lambda w: self.set_tool("edge"))
+        button4.set_tooltip_text("Edge (Ctrl+A)")
         button4.set_icon_widget(icon_arc)
+        add_radio_shortcut(ag, button4, "a", ctrl=True)
 
         button5 = gtk.RadioToolButton(button1,None)
         button5.connect("toggled", lambda w: self.set_tool("area"))
+        button5.set_tooltip_text("Area (Ctrl+B)")
         button5.set_icon_widget(icon_area)
+        add_radio_shortcut(ag, button5, "b", ctrl=True)
 
         toolbar.add(button1)
         toolbar.add(button2)
@@ -263,10 +294,12 @@ class NetEditor(gtk.VBox):
 
         button1 = gtk.ToolButton()
         button1.connect("clicked", lambda w: self.canvas.zoom_in())
+        button1.set_tooltip_text("Zoom in")
         button1.set_stock_id(gtk.STOCK_ZOOM_IN)
 
         button2 = gtk.ToolButton()
         button2.connect("clicked", lambda w: self.canvas.zoom_out())
+        button2.set_tooltip_text("Zoom out")
         button2.set_stock_id(gtk.STOCK_ZOOM_OUT)
 
         toolbar.add(button1)
@@ -286,6 +319,9 @@ class NetEditor(gtk.VBox):
 
     def _key_press(self, w, event):
         if gtk.gdk.keyval_name(event.keyval) == "Tab":
+            if hasattr(w, "code_complete"):
+                if w.code_complete.active_place_holder:
+                    return False
             self.focus_next_attribute()
             return True
 
@@ -330,7 +366,7 @@ class NetEditor(gtk.VBox):
         self.attribute_box.show_all()
 
     def _setup_no_attribute(self, text):
-        editor = codeedit.CodeEditor(self.project.get_syntax_highlight_key())
+        editor = codeedit.CodeEditor(self.app, self.project.get_syntax_highlight_key())
         editor.set_size_request(0, 60)
         editor.set_sensitive(False)
         label = gtk.Label(text)
@@ -559,7 +595,14 @@ class NetEditor(gtk.VBox):
     def _add_attribute_labelled_code_editor(self, name, get_fn, set_fn):
         label = gtk.Label(name)
         self.attribute_box.pack_start(label, False, False)
-        return self._add_attribute_code_editor(get_fn, set_fn)
+        editor = self._add_attribute_code_editor(get_fn, set_fn)
+        if label.get_text() == "Type" and completion.loaded:
+            editor.view.code_complete = completion.Completion(editor)
+            editor.view.set_show_line_numbers(False)
+            editor.view.code_complete.clang.set_type("")
+        else:
+            return editor
+        #return self._add_attribute_code_editor(get_fn, set_fn)
 
     def _add_attribute_checkbox_code_editor(
         self, name, bool_value, set_bool_fn, get_code_fn, set_code_fn):
@@ -605,7 +648,7 @@ class NetEditor(gtk.VBox):
                                                 set_fn,
                                                 original,
                                                 suppress_similar=True))
-        editor = codeedit.CodeEditor(self.project.get_syntax_highlight_key())
+        editor = codeedit.CodeEditor(self.app, self.project.get_syntax_highlight_key())
 
         # Brackets are highlighted even when textview has no focus, it is quite disturbing
         # So we turn this feature off
@@ -668,8 +711,8 @@ class NetList(ObjectTree):
             self.neteditor.switch_to_net(net)
 
     def _set_build_net(self, w):
-         obj = self.selected_object()
-         self.project.set_build_net(obj)
+        obj = self.selected_object()
+        self.project.set_build_net(obj)
 
     def _remove(self, w):
         obj = self.selected_object()

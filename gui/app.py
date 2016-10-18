@@ -60,7 +60,7 @@ class App:
         self.project = None
         self.sources_repository = extensions.SourcesRepository()
         self._open_welcome_tab()
-        self.grid_size = 1
+        self.grid_size = 6
         self.settings = self.load_settings()
         self.message_parser = re.compile(
             "\*(?P<location>((?P<id_int>\d+)/(?P<section>[^:]*)|(?P<id_string>[^:]+))"
@@ -111,6 +111,12 @@ class App:
         settings.add_section("main")
         settings.set("main", "save-before-build", "True")
         settings.set("main", "ptp-debug", "False")
+        settings.add_section("code_completion")
+        settings.set("code_completion","enable_highlight_current_line","False")
+        settings.set("code_completion", "enable_show_line_numbers", "False")
+        settings.set("code_completion", "tab_width", "4")
+        settings.set("code_completion","enable_info_box","False")
+        settings.set("code_completion", "delay_info_box", "250.0")
 
         filename = self.get_settings_filename()
         if os.path.isfile(filename):
@@ -360,7 +366,7 @@ class App:
     def edit_control_sequences(self):
         if self.window.switch_to_tab_by_key("sequences"):
             return
-        widget = controlseq.SequenceListWidget(self.project)
+        widget = controlseq.SequenceListWidget(self, self.project)
         self.window.add_tab(Tab(
             "Sequences", widget, "sequences",
             mainmenu_groups=("project",), call_close=True))
@@ -392,7 +398,7 @@ class App:
         if generator is None:
             return
         header = generator.get_transition_user_fn_header(transition.id)
-        editor = codeedit.TransitionCodeEditor(self.project, transition, header)
+        editor = codeedit.TransitionCodeEditor(self, self.project, transition, header)
         self.window.add_tab(Tab(name,
                                 editor,
                                 transition,
@@ -413,7 +419,7 @@ class App:
         header = generator.get_place_user_fn_header(place.id)
 
         name = "P: {0}".format(place.get_name_or_id())
-        editor = codeedit.PlaceCodeEditor(self.project, place, header)
+        editor = codeedit.PlaceCodeEditor(self, self.project, place, header)
         self.window.add_tab(Tab(name, editor, place, mainmenu_groups=("project",)))
         editor.jump_to_position(position)
 
@@ -441,6 +447,7 @@ class App:
             return
         widget = settings.SettingsWidget(self)
         self.window.add_tab(Tab("Settings", widget, "settings"))
+       
 
     def edit_head(self, lineno=None):
         position = ("", lineno) if lineno is not None else None
@@ -450,7 +457,7 @@ class App:
                 lambda tab: tab.widget.jump_to_position(position)):
             return
 
-        editor = codeedit.HeadCodeEditor(self.project)
+        editor = codeedit.HeadCodeEditor(self, self.project)
         tab = codeedit.TabCodeEditor("Head", editor, "Head")
         tab.mainmenu_groups = ("project",)
         self.window.add_tab(tab)
@@ -630,10 +637,7 @@ class App:
                       build_directory,
                       ok_callback=None,
                       fail_callback=None,
-                      target=None):
-        args = []
-        if target is not None:
-            args.append(target)
+                      args=()):
         self._run_build_program("make",
                                 args,
                                 build_directory,
@@ -646,10 +650,12 @@ class App:
 
         self._start_ptp(proj,
                         build_config,
-                        lambda lines: self._run_makefile(proj,
-                                                         build_config.directory,
-                                                         ok_callback,
-                                                         fail_callback),
+                        lambda lines: self._run_makefile(
+                            proj,
+                            build_config.directory,
+                            ok_callback,
+                            fail_callback,
+                            args=build_config.make_args),
                         fail_callback)
 
     def _start_ptp(self, proj, build_config, ok_callback=None, fail_callback=None):

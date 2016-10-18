@@ -35,10 +35,6 @@ class TraceLog {
 		void trace_token_add(int place_id, void *pointer);
 		void trace_token_remove(int place_id, void *pointer);
 
-		void trace_value(const int value);
-		void trace_value(const double value);
-		void trace_value(const std::string &str);
-
 		static void write_head(const std::string &name);
 
 		static IntTime get_current_time()
@@ -55,6 +51,9 @@ class TraceLog {
 		virtual void set_time(ca::IntTime time) {}
 		virtual IntTime get_relative_time() { return 0; }
 
+		void trace_value(const int value);
+		void trace_value(const double value);
+		void trace_value(const std::string &str);
 
 	protected:
 

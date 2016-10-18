@@ -87,11 +87,13 @@ int Process::process_packets(Thread *thread)
 			int msg_size;
 			MPI_Get_count(&status, MPI_BYTE, &msg_size);
 			char *buffer = (char*) malloc(msg_size); // FIXME: alloca for small packets
-			MPI_Recv(buffer, msg_size, MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			MPI_Recv(buffer, msg_size, MPI_BYTE,
+				 status.MPI_SOURCE, status.MPI_TAG,
+				 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 			/* Now we have to be sure that all thread messages
 			   are processed and we know about all nets */
 			thread->process_thread_messages();
-			net_changed |= process_packet(thread, status.MPI_SOURCE, status.MPI_TAG, buffer);
+			net_changed |= process_packet(thread, status.MPI_SOURCE, status.MPI_TAG, buffer, msg_size);
 
 			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &status);
 			if (!flag)
@@ -114,9 +116,10 @@ void Process::wait()
 	int msg_size;
 	MPI_Get_count(&status, MPI_BYTE, &msg_size);
 	char *buffer = (char*) malloc(msg_size); // FIXME: alloca for small packets
-	MPI_Recv(buffer, msg_size, MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	MPI_Recv(buffer, msg_size, MPI_BYTE, status.MPI_SOURCE,
+		 status.MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	this->get_thread()->process_thread_messages();
-	process_packet(this->get_thread(), status.MPI_SOURCE, status.MPI_TAG, buffer);
+	process_packet(this->get_thread(), status.MPI_SOURCE, status.MPI_TAG, buffer, msg_size);
 }
 
 // Scatter ------------------------------------------------------
